@@ -407,6 +407,8 @@ Options:
 | `-o OUTDIR` | Output directory | `assemblies` |
 | `-l LEVELS` | Assembly levels (comma-separated) | `complete,chromosome,scaffold,contig` |
 | `-s SOURCE` | Assembly source: `refseq`, `genbank`, or `all` | `refseq` |
+| `-n N` | Randomly keep at most N assemblies per `-t` taxon | all |
+| `-r SEED` | Integer random seed for `-n` selection | `0` |
 | `-e EMAIL` | NCBI e-mail (or set `NCBI_EMAIL` env var) | — |
 | `-k API_KEY` | NCBI API key for higher rate limits (or set `NCBI_API_KEY` env var) | — |
 
@@ -441,6 +443,52 @@ To keep the key elsewhere, point `PRIMEVAL_CREDENTIALS` at your own file.
 
 The key is resolved as: **`-k` flag → `NCBI_API_KEY` environment variable →
 credentials file** (first one set wins).
+
+### Scaling down large taxa
+
+By default `download-assemblies` fetches every assembly matching your level and
+source filters. To cap how many are downloaded **per `-t` taxon**, add `-n N`
+(and, optionally, `-r SEED` — an integer seed, default `0`, for reproducible
+selection):
+
+```bash
+download-assemblies -t Klebsiella -n 20 -r 1 -o assemblies/
+```
+
+Because the downloader is resume-aware and de-duplicates into one output
+directory, mix different per-taxon counts by composing invocations into the same
+`-o` directory:
+
+```bash
+download-assemblies -t Klebsiella          -n 20 -r 1 -o assemblies/
+download-assemblies -t "Escherichia coli"  -n 20 -r 1 -o assemblies/
+download-assemblies -t Vibrionaceae               -o assemblies/   # all
+# -> assemblies/ holds 20 Klebsiella + 20 E. coli + all Vibrionaceae
+```
+
+Selection is uniform-random within your `-l`/`-s` filters. The seed makes it
+deterministic *for a given NCBI result set*; because NCBI's holdings grow over
+time, the authoritative record of what was actually downloaded is the run's
+`metadata.csv` and `download.log` (which reports `sampled N of M available` per
+taxon). `-n` never errors when a taxon has fewer than `N` assemblies — it simply
+takes all of them. `-n` is applied to each `-t` taxon **before** cross-taxon
+de-duplication, so with nested or overlapping taxa the combined set can end up
+smaller than N × (number of taxa).
+
+Composing invocations into one `-o` directory accumulates both the `.fna` files
+**and** `metadata.csv` — each run merges its metadata into the existing CSV (by
+accession) rather than overwriting it, so the recipe above's final `metadata.csv`
+covers every assembly downloaded across all three invocations.
+
+**Curated sets:** subsampling is for scaling down broad taxa, not for building a
+specific positive set. If you need particular genomes (e.g. an allele-diverse set
+of a resistance gene's carriers), download them directly and drop the `.fna`
+files into your `assembly_dir` — primeval reads any `.fna`:
+
+```bash
+datasets download genome accession GCF_XXXXXXXXX.1 --include genome
+# unzip and place the .fna in assemblies/
+```
 
 ### HPC / SLURM
 

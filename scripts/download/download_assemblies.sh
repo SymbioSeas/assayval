@@ -22,6 +22,8 @@
 #   -l LEVELS      Assembly levels, comma-separated
 #                  (default: complete,chromosome,scaffold,contig)
 #   -s SOURCE      Assembly-source: refseq, genbank, or all (default: refseq)
+#   -n N           Randomly keep at most N assemblies per -t taxon (default: all)
+#   -r SEED        Integer random seed for -n selection (default: 0)
 #   -e EMAIL       NCBI e-mail address (optional but polite; or set NCBI_EMAIL env var)
 #   -k API_KEY     NCBI API key for higher rate limits (or set NCBI_API_KEY env var)
 #   -h             Show this help message
@@ -44,6 +46,8 @@ TAXA=()
 OUTDIR="assemblies"
 LEVELS="complete,chromosome,scaffold,contig"
 ASSEMBLY_SOURCE="refseq"
+LIMIT=""       # empty = keep all (no subsampling)
+SEED=0
 
 # ── Credentials ("set once") ────────────────────────────────────────────────────
 # Load an optional credentials file so an NCBI API key is applied on every run.
@@ -73,12 +77,14 @@ usage() {
     exit 1
 }
 
-while getopts "t:o:l:s:e:k:h" opt; do
+while getopts "t:o:l:s:n:r:e:k:h" opt; do
     case $opt in
         t) TAXA+=("$OPTARG") ;;
         o) OUTDIR="$OPTARG" ;;
         l) LEVELS="$OPTARG" ;;
         s) ASSEMBLY_SOURCE="$OPTARG" ;;
+        n) LIMIT="$OPTARG" ;;
+        r) SEED="$OPTARG" ;;
         e) EMAIL="$OPTARG" ;;
         k) API_KEY="$OPTARG" ;;
         h) usage ;;
@@ -96,10 +102,26 @@ case "${ASSEMBLY_SOURCE}" in
     *) echo "ERROR: -s must be one of: refseq, genbank, all (got '${ASSEMBLY_SOURCE}')." >&2; exit 1 ;;
 esac
 
+if [[ -n "${LIMIT}" ]]; then
+    if ! [[ "${LIMIT}" =~ ^[0-9]+$ ]] || [[ "$((10#${LIMIT}))" -lt 1 ]]; then
+        echo "ERROR: -n must be a positive integer (got '${LIMIT}')." >&2
+        exit 1
+    fi
+fi
+if ! [[ "${SEED}" =~ ^-?[0-9]+$ ]]; then
+    echo "ERROR: -r (seed) must be an integer (got '${SEED}')." >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARSER="${SCRIPT_DIR}/parse_metadata.py"
 if [[ ! -f "$PARSER" ]]; then
     echo "ERROR: parse_metadata.py not found at ${PARSER}" >&2
+    exit 1
+fi
+SUBSAMPLE="${SCRIPT_DIR}/subsample.py"
+if [[ -n "${LIMIT}" && ! -f "${SUBSAMPLE}" ]]; then
+    echo "ERROR: subsample.py not found at ${SUBSAMPLE}" >&2
     exit 1
 fi
 
@@ -121,6 +143,9 @@ log "Taxa         : ${#TAXA[@]} (${TAXA[*]})"
 log "Output dir   : ${OUTDIR}"
 log "Assembly levels: ${LEVELS}"
 log "Assembly source: ${ASSEMBLY_SOURCE}"
+if [[ -n "${LIMIT}" ]]; then
+    log "Subsampling  : up to ${LIMIT} per taxon (seed=${SEED})"
+fi
 
 # ── Step 1: Fetch accession list ───────────────────────────────────────────────
 log "Fetching assembly list from NCBI ..."
@@ -133,16 +158,30 @@ if [[ -n "${API_KEY}" ]]; then
     log "Using NCBI API key (higher rate limit)."
 fi
 
-# Query each taxon and accumulate the raw summaries. Overlapping taxa are
-# de-duplicated by accession in the next step.
+# Query each taxon. When -n is set, randomly cap each taxon's summaries via
+# subsample.py before accumulating. Overlapping taxa are de-duplicated by
+# accession in the next step (so a genome shared between taxa is kept once).
 : > "${SUMMARY_ALL}"
 for TAX in "${TAXA[@]}"; do
     log "  querying: ${TAX}"
+    TAX_JSONL="${WORK_TMP}/taxon_summary.jsonl"
     datasets summary genome taxon "${TAX}" \
         --assembly-source "${ASSEMBLY_SOURCE}" \
         --assembly-level "${LEVELS}" \
         --as-json-lines \
-        ${APIKEY_ARGS[@]+"${APIKEY_ARGS[@]}"} >> "${SUMMARY_ALL}"
+        ${APIKEY_ARGS[@]+"${APIKEY_ARGS[@]}"} > "${TAX_JSONL}"
+    AVAIL=$(grep -c . "${TAX_JSONL}" 2>/dev/null || true)
+    if [[ -n "${LIMIT}" ]]; then
+        TAX_SAMPLED="${WORK_TMP}/taxon_sampled.jsonl"
+        python3 "${SUBSAMPLE}" --jsonl "${TAX_JSONL}" --n "${LIMIT}" \
+            --seed "${SEED}" --out "${TAX_SAMPLED}"
+        KEPT=$(grep -c . "${TAX_SAMPLED}" 2>/dev/null || true)
+        log "  ${TAX}: sampled ${KEPT} of ${AVAIL} available (seed=${SEED})"
+        cat "${TAX_SAMPLED}" >> "${SUMMARY_ALL}"
+    else
+        log "  ${TAX}: ${AVAIL} available (no subsampling)"
+        cat "${TAX_JSONL}" >> "${SUMMARY_ALL}"
+    fi
 done
 
 # De-duplicate by accession → canonical JSONL (for metadata) + unique accession
@@ -235,7 +274,7 @@ log "Downloads complete — Downloaded: ${DOWNLOADED}  Skipped: ${SKIPPED}  Fail
 # ── Step 3: Build metadata CSV ─────────────────────────────────────────────────
 log "Building metadata CSV ..."
 
-python3 "${PARSER}" --jsonl "${JSONL_RAW}" --out "${METADATA_CSV}"
+python3 "${PARSER}" --jsonl "${JSONL_RAW}" --out "${METADATA_CSV}" --merge
 
 META_ROWS=$(( $(wc -l < "${METADATA_CSV}") - 1 ))
 if [[ "${META_ROWS}" -lt 1 ]]; then

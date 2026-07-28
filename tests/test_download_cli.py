@@ -35,3 +35,29 @@ def test_invalid_assembly_source_rejected(tmp_path):
     )
     assert r.returncode != 0
     assert "refseq" in (r.stdout + r.stderr).lower()
+
+
+def test_help_lists_subsample_flags():
+    exe = shutil.which("download-assemblies")
+    assert exe
+    out = subprocess.run([exe, "-h"], capture_output=True, text=True)
+    combined = out.stdout + out.stderr
+    assert "-n" in combined and "-r" in combined
+    assert "seed" in combined.lower()
+
+
+def test_invalid_n_rejected(tmp_path):
+    exe = shutil.which("download-assemblies")
+    assert exe
+    r = subprocess.run([exe, "-t", "Foo", "-n", "abc", "-o", str(tmp_path / "asm")],
+                       capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "-n" in (r.stdout + r.stderr)
+
+
+def test_n_zero_rejected(tmp_path):
+    exe = shutil.which("download-assemblies")
+    assert exe
+    r = subprocess.run([exe, "-t", "Foo", "-n", "0", "-o", str(tmp_path / "asm")],
+                       capture_output=True, text=True)
+    assert r.returncode != 0

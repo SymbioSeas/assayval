@@ -124,6 +124,25 @@ def build_row(rec):
     return row
 
 
+def merge_rows(existing, new):
+    """Union existing + new metadata rows by 'accession' (new wins on conflict).
+    Existing order is preserved; accessions only in `new` are appended in new's order.
+    """
+    new_by_acc = {r.get("accession", ""): r for r in new}
+    out = []
+    seen = set()
+    for r in existing:
+        acc = r.get("accession", "")
+        out.append(new_by_acc.get(acc, r))   # new wins when the accession recurs
+        seen.add(acc)
+    for r in new:
+        acc = r.get("accession", "")
+        if acc not in seen:
+            out.append(r)
+            seen.add(acc)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -131,6 +150,8 @@ def main():
                     help="datasets summary JSON-Lines file (produced by download_assemblies.sh)")
     ap.add_argument("--out", required=True,
                     help="output metadata CSV path")
+    ap.add_argument("--merge", action="store_true",
+                    help="union with an existing --out CSV (by accession) instead of overwriting")
     args = ap.parse_args()
 
     jsonl_path = Path(args.jsonl)
@@ -158,13 +179,27 @@ def main():
     fieldnames += extra
 
     out_path = Path(args.out)
+
+    merged = False
+    if args.merge and out_path.exists():
+        with open(out_path, encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            existing_rows = list(reader)
+            existing_fieldnames = reader.fieldnames or []
+        rows = merge_rows(existing_rows, rows)
+        fieldnames = fieldnames + [c for c in existing_fieldnames if c not in fieldnames]
+        merged = True
+
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
 
-    n_with_org = sum(1 for r in rows if r["organism_name"])
-    print(f"Wrote {len(rows)} rows x {len(fieldnames)} columns -> {out_path}")
+    n_with_org = sum(1 for r in rows if r.get("organism_name"))
+    if merged:
+        print(f"Merged -> {len(rows)} total rows x {len(fieldnames)} columns -> {out_path}")
+    else:
+        print(f"Wrote {len(rows)} rows x {len(fieldnames)} columns -> {out_path}")
     print(f"  rows with organism name: {n_with_org}/{len(rows)}")
     if bad:
         print(f"  WARNING: {bad} malformed JSON line(s) skipped")
