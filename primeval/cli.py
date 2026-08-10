@@ -67,10 +67,17 @@ def build_snakemake_cmd(*, snakefile, workdir, configfile, results_dir_rel,
     return cmd
 
 
-def _count_assemblies(configfile, workdir):
+def _load_config(configfile) -> dict:
     try:
         import yaml
-        cfg = yaml.safe_load(Path(configfile).read_text()) or {}
+        return yaml.safe_load(Path(configfile).read_text()) or {}
+    except Exception:
+        return {}
+
+
+def _count_assemblies(configfile, workdir):
+    try:
+        cfg = _load_config(configfile)
         adir = Path(workdir) / cfg.get("assembly_dir", "assemblies")
         return len(list(adir.glob("*.fna")))
     except Exception:
@@ -134,8 +141,14 @@ def main(argv=None, runner=None):
         extra = extra[1:]
     dry = _is_dry_run(extra)
 
-    run_dir, mode = resolve_run_dir(workdir / "results", args.run_name, args.force)
-    rel_results = run_dir.relative_to(workdir).as_posix()
+    # The results root honors results_dir from the config (default "results");
+    # the dated run directory is created inside it.
+    results_root = workdir / _load_config(configfile).get("results_dir", "results")
+    run_dir, mode = resolve_run_dir(results_root, args.run_name, args.force)
+    try:
+        rel_results = run_dir.relative_to(workdir).as_posix()
+    except ValueError:  # absolute results_dir outside the analysis directory
+        rel_results = run_dir.as_posix()
     # A dry run must not create the run directory or a run.log (it would burn the
     # run name and litter empty dated dirs). Only real runs materialize the dir.
     if dry:

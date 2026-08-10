@@ -371,7 +371,7 @@ def main():
     p.add_argument('--fna', required=True)
     p.add_argument('--assay-table', required=True)
     p.add_argument('--max-primer-mismatches', type=int, default=2)
-    p.add_argument('--prime3-exact-nt', type=int, default=3)
+    p.add_argument('--prime3-exact-nt', type=int, default=1)
     p.add_argument('--max-probe-mismatches', type=int, default=1)
     p.add_argument('--max-amplicon-size', type=int, default=500)
     p.add_argument('--store-amplicon-sequences',
