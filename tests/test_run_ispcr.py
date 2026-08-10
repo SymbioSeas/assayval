@@ -13,6 +13,10 @@ from run_ispcr import (
     load_blast_results,
     iupac_match,
     count_iupac_mismatches,
+    count_degenerate,
+    revcomp,
+    load_contigs,
+    reconstruct_full_hits,
     BLAST_COLS,
 )
 
@@ -28,6 +32,15 @@ def make_hit(**kwargs) -> dict:
     }
     defaults.update(kwargs)
     return defaults
+
+
+def contig_embedding(hit, pad_char='A', tail=30):
+    """Build a contig in which the hit's sseq occupies its subject coordinates,
+    so reconstruction re-derives exactly that window."""
+    sstart, send = int(hit['sstart']), int(hit['send'])
+    lo = min(sstart, send)
+    core = hit['sseq'] if sstart <= send else revcomp(hit['sseq'])
+    return pad_char * (lo - 1) + core + pad_char * tail
 
 
 # --- check_3prime_exact ---
@@ -55,63 +68,117 @@ def test_3prime_mismatch_outside_window_passes():
 # --- filter_primer_hits ---
 
 def test_filter_primer_perfect_forward():
-    hits = pd.DataFrame([make_hit(qend=17, sstart=100, send=116, mismatch=0)])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGC', max_mismatch=2, prime3_exact=3)
+    hit = make_hit(qend=17, sstart=100, send=116, mismatch=0)
+    contigs = {'contig1': contig_embedding(hit)}
+    hits = pd.DataFrame([hit])
+    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGC',
+                                max_mismatch=2, prime3_exact=3, contigs=contigs)
     assert len(result) == 1
 
 
 def test_filter_primer_too_many_mismatches():
     # sseq has 3 mismatches vs primer (positions 0, 5, 10 changed)
-    hits = pd.DataFrame([make_hit(qend=17, mismatch=3, sstart=100, send=116,
-                                   sseq='TGCCGTGCGTTGCCAGC')])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGC', max_mismatch=2, prime3_exact=3)
+    hit = make_hit(qend=17, mismatch=3, sstart=100, send=116,
+                   sseq='TGCCGTGCGTTGCCAGC')
+    contigs = {'contig1': contig_embedding(hit)}
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq='AGCCGAGCGTTACCAGC',
+                                max_mismatch=2, prime3_exact=3, contigs=contigs)
     assert len(result) == 0
 
 
-def test_filter_primer_partial_alignment_rejected():
-    """3' end absent (qend < primer_len) → rejected."""
-    hits = pd.DataFrame([make_hit(qend=14, mismatch=0, qseq='AGCCGAGCGTTACC',
-                                   sseq='AGCCGAGCGTTACC', sstart=100, send=113)])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGC', max_mismatch=2, prime3_exact=3)
+def test_filter_recovers_5prime_trimmed_hit():
+    """THE FIX: a hit BLAST trimmed at the 5' end (2 mismatches at primer
+    positions 2-3, clean 3' end) is reconstructed and passes."""
+    primer = 'GATTCGGTGAAGAAGAGATGATCTC'          # 25 nt (groEL_Valg fwd)
+    window = 'GTATCGGTGAAGAAGAGATGATCTC'          # genome, mismatches at pos 2,3
+    contigs = {'contig1': 'C' * 99 + window + 'C' * 50}
+    hit = make_hit(qstart=4, qend=25, length=22, mismatch=0,
+                   sstart=103, send=124, qseq=primer[3:], sseq=window[3:])
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq=primer,
+                                max_mismatch=3, prime3_exact=2, contigs=contigs)
+    assert len(result) == 1
+    assert result.iloc[0]['mismatch'] == 2
+    assert (result.iloc[0]['sstart'], result.iloc[0]['send']) == (100, 124)
+
+
+def test_filter_rejects_reconstructed_3prime_mismatch():
+    """Tall_dnaJ scenario: reconstruction recovers a 3'-trimmed hit, but the
+    penultimate-base mismatch still fails the 3'-exact filter."""
+    primer = 'AGCAGCTTATGACCAATACGCC'             # 22 nt
+    window = 'AGCAGCTTATGACCAATACGGC'             # pos 21 mismatch
+    contigs = {'contig1': 'A' * 99 + window + 'A' * 30}
+    hit = make_hit(qstart=1, qend=18, length=18, mismatch=0,
+                   sstart=100, send=117, qseq=primer[:18], sseq=window[:18])
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq=primer,
+                                max_mismatch=3, prime3_exact=2, contigs=contigs)
     assert len(result) == 0
 
 
-def test_filter_primer_5prime_truncated_rejected():
-    """3' end present but 5' end missing (qstart > 1) → rejected even with zero mismatches.
-
-    This is the partial-alignment false-positive case: only the last 11 of 20 nt aligned,
-    matching what NCBI BLAST reports as <100% query cover.
-    """
-    hits = pd.DataFrame([make_hit(qstart=7, qend=17, length=11, mismatch=0,
-                                   qseq='GTTACCAGC', sseq='GTTACCAGC',
-                                   sstart=106, send=116)])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGC', max_mismatch=2, prime3_exact=3)
+def test_filter_rejects_trimmed_hit_over_mismatch_budget():
+    """A spurious core hit reconstructs to a window with many mismatches and
+    is rejected by the mismatch budget (length 10 passes the pre-filter,
+    min_len = 17 - 4*2 = 9, so the reconstruction path is exercised)."""
+    primer = 'AGCCGAGCGTTACCAGC'                  # 17 nt
+    window = 'TTTTTTTTTTTACCAGC'                  # first 9 primer bases mismatch
+    contigs = {'contig1': 'G' * 99 + window + 'G' * 30}
+    hit = make_hit(qstart=8, qend=17, length=10, mismatch=2,
+                   sstart=107, send=116, qseq=primer[7:], sseq=window[7:])
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq=primer,
+                                max_mismatch=2, prime3_exact=3, contigs=contigs)
     assert len(result) == 0
+
+
+def test_filter_prefilter_drops_short_spurious_cores():
+    """Hits shorter than primer_len - 4*(budget + degenerate) cannot pass the
+    mismatch filter (blastn-short trimming implies >= k/4 mismatches per
+    k-base trimmed terminus) and are dropped before reconstruction."""
+    primer = 'AGCCGAGCGTTACCAGC'                  # 17 nt; min_len = 9
+    hit = make_hit(qstart=11, qend=17, length=7, mismatch=0,
+                   sstart=110, send=116, qseq=primer[10:], sseq=primer[10:])
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq=primer,
+                                max_mismatch=2, prime3_exact=3,
+                                contigs={'contig1': 'G' * 200})
+    assert len(result) == 0
+
+
+def test_count_degenerate():
+    assert count_degenerate('ACGT') == 0
+    assert count_degenerate('CAGGTTTGYTGCACGGCGAAGA') == 1
+    assert count_degenerate('GATCGAAGTRCCRACACTMGGA') == 3
 
 
 def test_filter_primer_both_strands_accepted():
-    """filter_primer_hits accepts both + and - strand hits; strand pairing is done in find_valid_amplicons."""
+    """filter_primer_hits accepts both + and - strand hits; strand pairing is
+    done in find_valid_amplicons. The two sites live at different coordinates
+    of one contig."""
+    primer = 'AGCCGAGCGTTACCAGC'
     plus_hit = make_hit(qend=17, mismatch=0, sstart=100, send=116)
-    minus_hit = make_hit(qend=17, mismatch=0, sstart=116, send=100)
-    hits = pd.DataFrame([plus_hit, minus_hit])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGC', max_mismatch=2, prime3_exact=3)
+    minus_hit = make_hit(qend=17, mismatch=0, sstart=316, send=300)
+    contig = 'A' * 99 + primer + 'A' * 183 + revcomp(primer) + 'A' * 30
+    contigs = {'contig1': contig}
+    result = filter_primer_hits(pd.DataFrame([plus_hit, minus_hit]), primer_seq=primer,
+                                max_mismatch=2, prime3_exact=3, contigs=contigs)
     assert len(result) == 2
 
 
 def test_filter_primer_minus_strand_accepted():
-    hits = pd.DataFrame([make_hit(qend=22, mismatch=0, sstart=300, send=279,
-                                   qseq='CGAACGCAATGATTCTCTGAGC',
-                                   sseq='CGAACGCAATGATTCTCTGAGC')])
-    result = filter_primer_hits(hits, primer_seq='CGAACGCAATGATTCTCTGAGC', max_mismatch=2, prime3_exact=3)
+    hit = make_hit(qend=22, mismatch=0, sstart=300, send=279,
+                   qseq='CGAACGCAATGATTCTCTGAGC',
+                   sseq='CGAACGCAATGATTCTCTGAGC')
+    contigs = {'contig1': contig_embedding(hit)}
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq='CGAACGCAATGATTCTCTGAGC',
+                                max_mismatch=2, prime3_exact=3, contigs=contigs)
     assert len(result) == 1
 
 
 def test_filter_primer_3prime_mismatch_rejected():
-    hits = pd.DataFrame([make_hit(qend=17, mismatch=1,
-                                   qseq='AGCCGAGCGTTACCAGT',
-                                   sseq='AGCCGAGCGTTACCAGC',
-                                   sstart=100, send=116)])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGT', max_mismatch=2, prime3_exact=3)
+    hit = make_hit(qend=17, mismatch=1,
+                   qseq='AGCCGAGCGTTACCAGT',
+                   sseq='AGCCGAGCGTTACCAGC',
+                   sstart=100, send=116)
+    contigs = {'contig1': contig_embedding(hit)}
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq='AGCCGAGCGTTACCAGT',
+                                max_mismatch=2, prime3_exact=3, contigs=contigs)
     assert len(result) == 0
 
 
@@ -203,10 +270,12 @@ _PROBE_SEQ = 'ACGGGACAAAAAGGATGGCGAGTAC'  # 25 nt
 
 def test_probe_within_amplicon():
     amps = [_make_amplicon()]
-    probe_hits = pd.DataFrame([make_hit(qseqid='TestAssay_probe', sseqid='c1',
-                                         qend=25, sstart=150, send=174, mismatch=0,
-                                         qseq=_PROBE_SEQ, sseq=_PROBE_SEQ)])
-    result = check_probe_in_amplicons(amps, probe_hits, probe_seq=_PROBE_SEQ, max_probe_mismatches=1)
+    hit = make_hit(qseqid='TestAssay_probe', sseqid='c1',
+                   qend=25, length=25, sstart=150, send=174, mismatch=0,
+                   qseq=_PROBE_SEQ, sseq=_PROBE_SEQ)
+    contigs = {'c1': contig_embedding(hit)}
+    result = check_probe_in_amplicons(amps, pd.DataFrame([hit]), probe_seq=_PROBE_SEQ,
+                                      max_probe_mismatches=1, contigs=contigs)
     assert result[0]['probe_found'] is True
     assert result[0]['probe_mismatches'] == 0
     assert result[0]['probe_strand'] == '+'
@@ -214,10 +283,12 @@ def test_probe_within_amplicon():
 
 def test_probe_outside_amplicon():
     amps = [_make_amplicon()]
-    probe_hits = pd.DataFrame([make_hit(qseqid='TestAssay_probe', sseqid='c1',
-                                         qend=25, sstart=500, send=524, mismatch=0,
-                                         qseq=_PROBE_SEQ, sseq=_PROBE_SEQ)])
-    result = check_probe_in_amplicons(amps, probe_hits, probe_seq=_PROBE_SEQ, max_probe_mismatches=1)
+    hit = make_hit(qseqid='TestAssay_probe', sseqid='c1',
+                   qend=25, length=25, sstart=500, send=524, mismatch=0,
+                   qseq=_PROBE_SEQ, sseq=_PROBE_SEQ)
+    contigs = {'c1': contig_embedding(hit)}
+    result = check_probe_in_amplicons(amps, pd.DataFrame([hit]), probe_seq=_PROBE_SEQ,
+                                      max_probe_mismatches=1, contigs=contigs)
     assert result[0]['probe_found'] is False
 
 
@@ -225,21 +296,39 @@ def test_probe_too_many_mismatches():
     amps = [_make_amplicon()]
     # 2 true mismatches in sseq (positions 23,24 changed) so IUPAC count == 2
     sseq_mm2 = _PROBE_SEQ[:-2] + 'TT'
-    probe_hits = pd.DataFrame([make_hit(qseqid='TestAssay_probe', sseqid='c1',
-                                         qend=25, sstart=150, send=174, mismatch=2,
-                                         qseq=_PROBE_SEQ, sseq=sseq_mm2)])
-    result = check_probe_in_amplicons(amps, probe_hits, probe_seq=_PROBE_SEQ, max_probe_mismatches=1)
+    hit = make_hit(qseqid='TestAssay_probe', sseqid='c1',
+                   qend=25, length=25, sstart=150, send=174, mismatch=2,
+                   qseq=_PROBE_SEQ, sseq=sseq_mm2)
+    contigs = {'c1': contig_embedding(hit)}
+    result = check_probe_in_amplicons(amps, pd.DataFrame([hit]), probe_seq=_PROBE_SEQ,
+                                      max_probe_mismatches=1, contigs=contigs)
     assert result[0]['probe_found'] is False
 
 
 def test_probe_minus_strand_detected():
     amps = [_make_amplicon()]
-    probe_hits = pd.DataFrame([make_hit(qseqid='TestAssay_probe', sseqid='c1',
-                                         qend=25, sstart=174, send=150, mismatch=0,
-                                         qseq=_PROBE_SEQ, sseq=_PROBE_SEQ)])
-    result = check_probe_in_amplicons(amps, probe_hits, probe_seq=_PROBE_SEQ, max_probe_mismatches=1)
+    hit = make_hit(qseqid='TestAssay_probe', sseqid='c1',
+                   qend=25, length=25, sstart=174, send=150, mismatch=0,
+                   qseq=_PROBE_SEQ, sseq=_PROBE_SEQ)
+    contigs = {'c1': contig_embedding(hit)}
+    result = check_probe_in_amplicons(amps, pd.DataFrame([hit]), probe_seq=_PROBE_SEQ,
+                                      max_probe_mismatches=1, contigs=contigs)
     assert result[0]['probe_found'] is True
     assert result[0]['probe_strand'] == '-'
+
+
+def test_probe_5prime_trimmed_recovered():
+    """Probe hits get the same end-trimming reconstruction as primers."""
+    amps = [_make_amplicon()]
+    window = 'T' + _PROBE_SEQ[1:]                 # mismatch at probe position 1
+    hit = make_hit(qseqid='TestAssay_probe', sseqid='c1',
+                   qstart=2, qend=25, length=24, mismatch=0,
+                   sstart=151, send=174, qseq=_PROBE_SEQ[1:], sseq=window[1:])
+    contigs = {'c1': 'G' * 149 + window + 'G' * 30}
+    result = check_probe_in_amplicons(amps, pd.DataFrame([hit]), probe_seq=_PROBE_SEQ,
+                                      max_probe_mismatches=1, contigs=contigs)
+    assert result[0]['probe_found'] is True
+    assert result[0]['probe_mismatches'] == 1
 
 
 # --- call_detection ---
@@ -302,26 +391,28 @@ def test_run_ispcr_integration(tmp_path):
     """End-to-end test: one assay, one assembly, full detection."""
     from run_ispcr import run_ispcr
 
+    fwd_seq = "AGCCGAGCGTTACCAGC"                  # 17 nt, at 100..116 (+)
+    rev_seq = "CGAACGCAATGATTCTCTGAGC"             # 22 nt, revcomp at 279..300
+    probe_seq = "ACGGGACAAAAAGGATGGCGAGTAC"        # 25 nt, at 150..174 (+)
+
     # Minimal assay table — VhPath only, no IDT modifications in these seqs
     assay_csv = tmp_path / "assay_table.csv"
     assay_csv.write_text(
         "assay,probe,fwd,rev\n"
-        "VhPath,ACGGGACAAAAAGGATGGCGAGTAC,AGCCGAGCGTTACCAGC,CGAACGCAATGATTCTCTGAGC\n"
+        f"VhPath,{probe_seq},{fwd_seq},{rev_seq}\n"
     )
 
-    # Fake .fna — single contig, enough sequence to contain the amplicon
+    # .fna genuinely containing the amplicon at positions 100-300:
+    # 1..99 filler | fwd 100..116 | filler | probe 150..174 | filler |
+    # revcomp(rev) 279..300 | filler to 400. Hit windows are re-extracted
+    # from this sequence by reconstruct_full_hits, so it must be real.
+    seq = ("T" * 99 + fwd_seq + "T" * 33 + probe_seq + "T" * 104
+           + revcomp(rev_seq) + "T" * 100)
+    assert len(seq) == 400
     fna_path = tmp_path / "GCF_000001.fna"
-    # 400 nt sequence; amplicon will be at positions 100-300
-    seq = "A" * 400
     fna_path.write_text(f">contig1\n{seq}\n")
 
     # BLAST TSV: fwd hit (+strand), rev hit (-strand), probe hit within amplicon
-    # fwd: VhPath_fwd, contig1, 100% id, len=17, 0 mm, sstart=100, send=116
-    # rev: VhPath_rev, contig1, 100% id, len=22, 0 mm, sstart=300, send=279  (rev strand: sstart>send)
-    # probe: VhPath_probe, contig1, within amplicon, sstart=150, send=174
-    fwd_seq = "AGCCGAGCGTTACCAGC"
-    rev_seq = "CGAACGCAATGATTCTCTGAGC"
-    probe_seq = "ACGGGACAAAAAGGATGGCGAGTAC"
     blast_tsv = tmp_path / "blast.tsv"
     blast_tsv.write_text(
         "\t".join(["VhPath_fwd", "contig1", "100.0", "17", "0", "0",
@@ -459,14 +550,15 @@ def test_filter_primer_hits_iupac_match_accepted():
     """Degenerate primer base matching subject within threshold is accepted."""
     # Primer: AGCCGAGCGTTACCAGR (17 nt, R at end)
     # Subject: AGCCGAGCGTTACCAGA — R matches A → 0 IUPAC mismatches
-    hits = pd.DataFrame([make_hit(
+    hit = make_hit(
         qend=17, mismatch=1,  # BLAST overcounts: reports 1 mismatch for R vs A
         qseq='AGCCGAGCGTTACCAGR',
         sseq='AGCCGAGCGTTACCAGA',
         sstart=100, send=116,
-    )])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGR',
-                                 max_mismatch=0, prime3_exact=3)
+    )
+    contigs = {'contig1': contig_embedding(hit)}
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq='AGCCGAGCGTTACCAGR',
+                                 max_mismatch=0, prime3_exact=3, contigs=contigs)
     assert len(result) == 1
     assert result.iloc[0]['mismatch'] == 0  # IUPAC-corrected count
 
@@ -475,26 +567,28 @@ def test_filter_primer_hits_iupac_true_mismatch_rejected():
     """Degenerate primer base NOT matching subject is still a mismatch."""
     # Primer: AGCCGAGCGTTACCAGR (R at end)
     # Subject: AGCCGAGCGTTACCAGC — R does NOT match C → 1 IUPAC mismatch
-    hits = pd.DataFrame([make_hit(
+    hit = make_hit(
         qend=17, mismatch=1,
         qseq='AGCCGAGCGTTACCAGR',
         sseq='AGCCGAGCGTTACCAGC',
         sstart=100, send=116,
-    )])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGR',
-                                 max_mismatch=0, prime3_exact=3)
+    )
+    contigs = {'contig1': contig_embedding(hit)}
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq='AGCCGAGCGTTACCAGR',
+                                 max_mismatch=0, prime3_exact=3, contigs=contigs)
     assert len(result) == 0
 
 
 def test_filter_primer_hits_gapopen_rejected():
     """Hits with gapopen > 0 are rejected regardless of mismatch count."""
-    hits = pd.DataFrame([{**make_hit(qend=17, mismatch=0,
-                                      qseq='AGCCGAGCGTTACCAGC',
-                                      sseq='AGCCGAGCGTTACCAGC',
-                                      sstart=100, send=116),
-                           'gapopen': 1}])
-    result = filter_primer_hits(hits, primer_seq='AGCCGAGCGTTACCAGC',
-                                 max_mismatch=2, prime3_exact=3)
+    hit = {**make_hit(qend=17, mismatch=0,
+                      qseq='AGCCGAGCGTTACCAGC',
+                      sseq='AGCCGAGCGTTACCAGC',
+                      sstart=100, send=116),
+           'gapopen': 1}
+    contigs = {'contig1': contig_embedding(hit)}
+    result = filter_primer_hits(pd.DataFrame([hit]), primer_seq='AGCCGAGCGTTACCAGC',
+                                 max_mismatch=2, prime3_exact=3, contigs=contigs)
     assert len(result) == 0
 
 
@@ -541,6 +635,141 @@ def test_check_probe_empty_seq_passthrough():
                                         'mismatch', 'gapopen', 'qstart', 'qend',
                                         'sstart', 'send', 'evalue', 'bitscore',
                                         'qseq', 'sseq'])
-    result = check_probe_in_amplicons(amps, probe_hits, probe_seq='', max_probe_mismatches=1)
+    result = check_probe_in_amplicons(amps, probe_hits, probe_seq='',
+                                      max_probe_mismatches=1, contigs={})
     assert result[0]['probe_found'] is False
     assert result[0]['probe_mismatches'] is None
+
+
+# --- revcomp / load_contigs / reconstruct_full_hits ---
+
+def test_revcomp_iupac():
+    assert revcomp('ACGT') == 'ACGT'
+    assert revcomp('ACGTRY') == 'RYACGT'   # R<->Y complement, then reversed
+    assert revcomp('AAA-C') == 'G-TTT'     # '-' passes through
+
+
+def test_load_contigs(tmp_path):
+    fna = tmp_path / 'g.fna'
+    fna.write_text('>c1 description text\nacgt\nACGT\n>c2\nTTTT\n')
+    contigs = load_contigs(str(fna))
+    assert contigs == {'c1': 'ACGTACGT', 'c2': 'TTTT'}
+
+
+def test_reconstruct_plus_strand_5prime_trim():
+    """groEL_Valg scenario: BLAST trims 3 bases off the 5' end (2 mismatches at
+    primer positions 2-3); reconstruction recovers the full 25-nt window."""
+    primer = 'GATTCGGTGAAGAAGAGATGATCTC'          # 25 nt
+    window = 'GTATCGGTGAAGAAGAGATGATCTC'          # genome: mismatches at pos 2,3
+    contigs = {'c1': 'C' * 99 + window + 'C' * 50}  # window at 100..124
+    hit = make_hit(sseqid='c1', qstart=4, qend=25, length=22, mismatch=0,
+                   sstart=103, send=124,
+                   qseq=primer[3:], sseq=window[3:])
+    out = reconstruct_full_hits(pd.DataFrame([hit]), 25, contigs)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row['sseq'] == window
+    assert (row['sstart'], row['send']) == (100, 124)
+    assert (row['qstart'], row['qend']) == (1, 25)
+    assert count_iupac_mismatches(primer, row['sseq']) == 2
+
+
+def test_reconstruct_minus_strand_3prime_trim():
+    """Tall_dnaJ scenario on the minus strand: BLAST trims the last 4 query
+    bases (penultimate mismatch); reconstruction recovers them from the genome."""
+    primer = 'AGCAGCTTATGACCAATACGCC'             # 22 nt
+    window = 'AGCAGCTTATGACCAATACGGC'             # genome (primer-oriented), pos 21 C->G
+    # minus-strand: genome plus-strand carries revcomp(window) at 200..221
+    contigs = {'c1': 'A' * 199 + revcomp(window) + 'A' * 30}
+    # BLAST aligned query 1..18 only; primer-oriented subject coords:
+    # query base 1 at subject 221 (sstart), query base 18 at subject 204 (send)
+    hit = make_hit(sseqid='c1', qstart=1, qend=18, length=18, mismatch=0,
+                   sstart=221, send=204,
+                   qseq=primer[:18], sseq=window[:18])
+    out = reconstruct_full_hits(pd.DataFrame([hit]), 22, contigs)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row['sseq'] == window
+    assert (row['sstart'], row['send']) == (221, 200)
+    assert count_iupac_mismatches(primer, row['sseq']) == 1
+    assert check_3prime_exact(primer, row['sseq'], 2) is False  # penultimate mismatch
+
+
+def test_reconstruct_pads_past_contig_edge():
+    """Extension beyond the contig start is padded with '-', which downstream
+    filters count as mismatches."""
+    primer = 'AGCCGAGCGTTACCAGC'                  # 17 nt
+    contigs = {'c1': primer[2:] + 'G' * 30}       # only last 15 primer bases present, at 1..15
+    hit = make_hit(sseqid='c1', qstart=3, qend=17, length=15, mismatch=0,
+                   sstart=1, send=15, qseq=primer[2:], sseq=primer[2:])
+    out = reconstruct_full_hits(pd.DataFrame([hit]), 17, contigs)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row['sseq'] == '--' + primer[2:]
+    assert count_iupac_mismatches(primer, row['sseq']) == 2
+
+
+def test_reconstruct_dedupes_identical_windows():
+    """Two partial hits from different seeds of the same site collapse to one row."""
+    primer = 'AGCCGAGCGTTACCAGC'
+    contigs = {'c1': 'A' * 99 + primer + 'A' * 30}
+    h1 = make_hit(sseqid='c1', qstart=1, qend=12, length=12, sstart=100, send=111,
+                  qseq=primer[:12], sseq=primer[:12])
+    h2 = make_hit(sseqid='c1', qstart=6, qend=17, length=12, sstart=105, send=116,
+                  qseq=primer[5:], sseq=primer[5:])
+    out = reconstruct_full_hits(pd.DataFrame([h1, h2]), 17, contigs)
+    assert len(out) == 1
+
+
+def test_reconstruct_unknown_contig_dropped():
+    hit = make_hit(sseqid='no_such_contig')
+    out = reconstruct_full_hits(pd.DataFrame([hit]), 17, {'c1': 'ACGT'})
+    assert len(out) == 0
+
+
+def test_run_ispcr_multiple_assays_no_state_leak(tmp_path):
+    """Regression: the loaded genome dict must survive across assay iterations
+    (call_detection's returned contig-id string once shadowed it, breaking
+    every assay after the first)."""
+    from run_ispcr import run_ispcr
+
+    fwd_seq = "AGCCGAGCGTTACCAGC"
+    rev_seq = "CGAACGCAATGATTCTCTGAGC"
+    probe_seq = "ACGGGACAAAAAGGATGGCGAGTAC"
+
+    assay_csv = tmp_path / "assay_table.csv"
+    assay_csv.write_text(
+        "assay,probe,fwd,rev\n"
+        f"AssayA,{probe_seq},{fwd_seq},{rev_seq}\n"
+        f"AssayB,{probe_seq},{fwd_seq},{rev_seq}\n"
+    )
+
+    seq = ("T" * 99 + fwd_seq + "T" * 33 + probe_seq + "T" * 104
+           + revcomp(rev_seq) + "T" * 100)
+    fna_path = tmp_path / "GCF_000002.fna"
+    fna_path.write_text(f">contig1\n{seq}\n")
+
+    rows = []
+    for assay in ("AssayA", "AssayB"):
+        rows.append("\t".join([f"{assay}_fwd", "contig1", "100.0", "17", "0", "0",
+                               "1", "17", "100", "116", "0.001", "32.0", fwd_seq, fwd_seq]))
+        rows.append("\t".join([f"{assay}_rev", "contig1", "100.0", "22", "0", "0",
+                               "1", "22", "300", "279", "0.001", "44.0", rev_seq, rev_seq]))
+        rows.append("\t".join([f"{assay}_probe", "contig1", "100.0", "25", "0", "0",
+                               "1", "25", "150", "174", "0.001", "50.0", probe_seq, probe_seq]))
+    blast_tsv = tmp_path / "blast.tsv"
+    blast_tsv.write_text("\n".join(rows) + "\n")
+
+    det_df = run_ispcr(
+        blast_tsv=str(blast_tsv),
+        assay_table=str(assay_csv),
+        fna_path=str(fna_path),
+        max_primer_mismatches=2,
+        prime3_exact_nt=3,
+        max_probe_mismatches=1,
+        max_amplicon_size=500,
+        store_amplicon_sequences=False,
+    )
+
+    assert len(det_df) == 2
+    assert list(det_df['detection_call']) == ['Detected', 'Detected']

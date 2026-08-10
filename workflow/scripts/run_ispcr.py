@@ -58,22 +58,109 @@ def check_3prime_exact(primer_seq: str, sseq: str, n: int = 3) -> bool:
     return all(iupac_match(q, s) for q, s in zip(tail_q, tail_s))
 
 
-def filter_primer_hits(hits: pd.DataFrame, primer_seq: str,
-                        max_mismatch: int, prime3_exact: int) -> pd.DataFrame:
-    """Return hits passing full-length, mismatch, and 3'-exact filters.
+COMPLEMENT = str.maketrans(
+    'ACGTRYSWKMBDHVNacgtryswkmbdhvn',
+    'TGCAYRSWMKVHDBNtgcayrswmkvhdbn',
+)
 
-    Requires qstart==1 AND qend==primer_len (100% query coverage) and gapopen==0
-    (no indels). Mismatch counting is IUPAC-aware using the original primer sequence.
-    Strand filtering is deferred to find_valid_amplicons, which handles both target
-    gene orientations (+ strand and - strand assemblies).
+
+def revcomp(seq: str) -> str:
+    """Reverse-complement, IUPAC-aware; characters without a complement
+    (e.g. '-') pass through unchanged."""
+    return seq.translate(COMPLEMENT)[::-1]
+
+
+def count_degenerate(primer_seq: str) -> int:
+    """Number of IUPAC-degenerate positions in an oligo."""
+    return sum(1 for b in primer_seq.upper() if b not in 'ACGT')
+
+
+def load_contigs(fna_path: str) -> dict[str, str]:
+    """Load all contigs of an assembly into memory, uppercased, keyed by id."""
+    return {rec.id: str(rec.seq).upper() for rec in SeqIO.parse(fna_path, 'fasta')}
+
+
+def reconstruct_full_hits(hits: pd.DataFrame, primer_len: int,
+                          contigs: dict[str, str]) -> pd.DataFrame:
+    """Rebuild each gapless BLAST hit as a full-length oligo window.
+
+    blastn reports local alignments, and extending an alignment through a
+    terminal mismatch always lowers its score (blastn-short scores matches +1,
+    mismatches -3), so an oligo whose outer bases mismatch the template comes
+    back with qstart > 1 and/or qend < oligo length. Requiring full query
+    coverage would silently discard such hits no matter how permissive the
+    mismatch tolerance is. Instead, the un-aligned oligo ends are mapped onto
+    subject coordinates and the complete window is re-extracted from the
+    genome, so the IUPAC-aware mismatch count and 3'-exact filter judge every
+    oligo position against real template sequence.
+
+    Returned rows have sstart/send/sseq rewritten to the full-length window
+    (sseq oriented to the query; minus-strand windows reverse-complemented),
+    qstart=1 and qend=primer_len. Window positions beyond a contig edge are
+    padded with '-', which downstream filters count as mismatches. Hits whose
+    reconstructed windows are identical are deduplicated.
+
+    Assumes gapless hits (filter gapopen==0 upstream): with no indels, query
+    and subject coordinates map 1:1.
+    """
+    rows = []
+    for _, h in hits.iterrows():
+        contig = contigs.get(h['sseqid'])
+        if contig is None:
+            continue
+        left_ext = int(h['qstart']) - 1
+        right_ext = primer_len - int(h['qend'])
+        sstart, send = int(h['sstart']), int(h['send'])
+        if sstart <= send:  # plus strand
+            lo = sstart - left_ext
+            hi = send + right_ext
+            new_sstart, new_send = lo, hi
+        else:  # minus strand: query 5'->3' runs high->low on the subject
+            lo = send - right_ext
+            hi = sstart + left_ext
+            new_sstart, new_send = hi, lo
+        left_pad = max(0, 1 - lo)
+        right_pad = max(0, hi - len(contig))
+        window = contig[max(lo, 1) - 1:min(hi, len(contig))]
+        window = '-' * left_pad + window + '-' * right_pad
+        h = h.copy()
+        h['sseq'] = revcomp(window) if sstart > send else window
+        h['sstart'], h['send'] = new_sstart, new_send
+        h['qstart'], h['qend'] = 1, primer_len
+        rows.append(h)
+    if not rows:
+        return pd.DataFrame(columns=hits.columns)
+    return pd.DataFrame(rows).drop_duplicates(subset=['sseqid', 'sstart', 'send'])
+
+
+def filter_primer_hits(hits: pd.DataFrame, primer_seq: str,
+                        max_mismatch: int, prime3_exact: int,
+                        contigs: dict[str, str]) -> pd.DataFrame:
+    """Return hits passing mismatch and 3'-exact filters over the FULL oligo.
+
+    BLAST hits are gapless-filtered, reconstructed to full oligo length from
+    the genome (see reconstruct_full_hits — local alignments cannot include
+    terminal mismatches, so partial hits must be recovered rather than
+    dropped), then judged by IUPAC-aware mismatch counting and the 3'-exact
+    check. Strand filtering is deferred to find_valid_amplicons, which handles
+    both target gene orientations (+ strand and - strand assemblies).
     """
     if hits.empty:
         return hits
     primer_len = len(primer_seq)
-    hits = hits[(hits['qstart'] == 1) & (hits['qend'] == primer_len)].copy()
+    hits = hits[hits['gapopen'] == 0].copy()
     if hits.empty:
         return hits
-    hits = hits[hits['gapopen'] == 0]
+    # Cheap pre-filter: under blastn-short scoring (+1/-3) any trimmed
+    # terminus of k bases contains >= k/4 BLAST-scored mismatches, so a hit
+    # shorter than primer_len - 4*budget cannot pass the mismatch filter.
+    # Degenerate oligo positions are BLAST-scored as mismatches yet may be
+    # IUPAC matches, hence the count_degenerate allowance.
+    min_len = primer_len - 4 * (max_mismatch + count_degenerate(primer_seq))
+    hits = hits[hits['length'] >= min_len]
+    if hits.empty:
+        return hits
+    hits = reconstruct_full_hits(hits, primer_len, contigs)
     if hits.empty:
         return hits
     hits['mismatch'] = hits['sseq'].apply(
@@ -132,19 +219,22 @@ def find_valid_amplicons(fwd_hits: pd.DataFrame, rev_hits: pd.DataFrame,
 
 
 def check_probe_in_amplicons(amplicons: list[dict], probe_hits: pd.DataFrame,
-                               probe_seq: str, max_probe_mismatches: int) -> list[dict]:
+                               probe_seq: str, max_probe_mismatches: int,
+                               contigs: dict[str, str]) -> list[dict]:
     """For each amplicon, find a probe hit contained within it (either strand).
 
-    Applies full-length (qstart==1, qend==probe_len), no-indel (gapopen==0),
-    and IUPAC-aware mismatch filters before checking spatial containment.
+    Probe hits get the same treatment as primers: gapless filter, full-length
+    reconstruction from the genome (recovers BLAST end-trimmed hits), then
+    IUPAC-aware mismatch filtering before checking spatial containment.
     """
     if not probe_seq:
         return amplicons
     probe_len = len(probe_seq)
-    valid_probe = probe_hits[
-        (probe_hits['qstart'] == 1) & (probe_hits['qend'] == probe_len) &
-        (probe_hits['gapopen'] == 0)
-    ].copy()
+    valid_probe = probe_hits[probe_hits['gapopen'] == 0].copy()
+    if not valid_probe.empty:
+        min_len = probe_len - 4 * (max_probe_mismatches + count_degenerate(probe_seq))
+        valid_probe = valid_probe[valid_probe['length'] >= min_len]
+        valid_probe = reconstruct_full_hits(valid_probe, probe_len, contigs)
     if not valid_probe.empty:
         valid_probe['mismatch'] = valid_probe['sseq'].apply(
             lambda s: count_iupac_mismatches(probe_seq, s)
@@ -181,13 +271,15 @@ def call_detection(amplicons: list[dict], has_probe: bool = True) -> tuple:
     return call, n, multi, sizes, contigs
 
 
-def extract_amplicon_sequence(fna_path: str, contig_id: str,
+def extract_amplicon_sequence(contigs: dict[str, str], contig_id: str,
                                start: int, end: int) -> str:
-    """Extract 1-based inclusive subsequence from .fna."""
-    for record in SeqIO.parse(fna_path, 'fasta'):
-        if record.id == contig_id:
-            return str(record.seq[start - 1:end])
-    return ''
+    """Extract 1-based inclusive subsequence from the loaded contigs.
+
+    The max(start, 1) guard protects against edge-reconstructed hit
+    coordinates that fall before the contig start.
+    """
+    seq = contigs.get(contig_id, '')
+    return seq[max(start, 1) - 1:end]
 
 
 def load_blast_results(blast_tsv: str) -> pd.DataFrame:
@@ -209,6 +301,9 @@ def run_ispcr(blast_tsv: str, assay_table: str, fna_path: str,
     """
     blast = load_blast_results(blast_tsv)
     accession = Path(fna_path).stem
+    # NB: named contig_seqs (not contigs) — the per-assay loop below rebinds
+    # `contigs` to call_detection's joined contig-id string.
+    contig_seqs = load_contigs(fna_path)
 
     with open(assay_table, encoding='utf-8-sig') as f:
         assays = list(csv.DictReader(f))
@@ -227,17 +322,20 @@ def run_ispcr(blast_tsv: str, assay_table: str, fna_path: str,
         probe_hits_all = blast[blast['qseqid'] == f'{name}_probe']
 
         fwd_hits = filter_primer_hits(fwd_hits_all, fwd_seq,
-                                       max_primer_mismatches, prime3_exact_nt)
+                                       max_primer_mismatches, prime3_exact_nt,
+                                       contig_seqs)
         rev_hits = filter_primer_hits(rev_hits_all, rev_seq,
-                                       max_primer_mismatches, prime3_exact_nt)
+                                       max_primer_mismatches, prime3_exact_nt,
+                                       contig_seqs)
 
         amplicons = find_valid_amplicons(fwd_hits, rev_hits, max_amplicon_size)
-        amplicons = check_probe_in_amplicons(amplicons, probe_hits_all, probe_seq, max_probe_mismatches)
+        amplicons = check_probe_in_amplicons(amplicons, probe_hits_all, probe_seq,
+                                             max_probe_mismatches, contig_seqs)
 
         if store_amplicon_sequences:
             for amp in amplicons:
                 amp['amplicon_sequence'] = extract_amplicon_sequence(
-                    fna_path, amp['contig_id'], amp['amplicon_start'], amp['amplicon_end']
+                    contig_seqs, amp['contig_id'], amp['amplicon_start'], amp['amplicon_end']
                 )
 
         call, n, multi, sizes, contigs = call_detection(amplicons, has_probe)

@@ -276,6 +276,28 @@ The BLAST search itself is run with deliberately permissive settings
 queries) to avoid candidate binding site being missed; stringency is enforced
 downstream by the mismatch, 3′-exact, and amplicon-size filters above.
 
+### Terminal mismatches and BLAST end-trimming
+
+BLAST reports *local* alignments: an alignment is trimmed to the ends that
+maximize its score, so it can never extend through a mismatch at an oligo
+terminus (with `blastn-short` scoring, +1 match / −3 mismatch, any mismatch
+within ~4 bases of either end causes trimming). A naive "100% query coverage"
+filter downstream of BLAST would therefore silently discard every hit with a
+mismatch near a primer end — no matter how permissive `max_primer_mismatches`
+is — producing systematic false negatives for assays whose only template
+variation sits at a primer terminus.
+
+primeval instead **reconstructs** each gapless hit to full oligo length: the
+un-aligned oligo ends are mapped onto the assembly via the hit coordinates,
+the complete window is re-read from the genome sequence (reverse-complemented
+for minus-strand hits; positions beyond a contig edge are treated as
+mismatches), and the IUPAC-aware mismatch count and `prime3_exact_nt` filter
+are applied to the full-length window. 5′ mismatches thus count only against
+the `max_primer_mismatches` budget — consistent with their minimal effect on
+priming — while 3′-terminal mismatches remain governed by the strict
+`prime3_exact_nt` rule. Probes are handled the same way against
+`max_probe_mismatches`.
+
 ---
 
 ## Outputs
