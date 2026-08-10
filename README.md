@@ -120,7 +120,7 @@ results_dir: "results"              # all outputs written here
 assay_table: "assay_table.csv"      # your assay definitions
 
 max_primer_mismatches: 2            # mismatches allowed per primer
-prime3_exact_nt: 3                  # 3′-terminal bases that must match exactly
+prime3_exact_nt: 1                  # 3′-terminal bases that must match exactly
 max_probe_mismatches: 1             # mismatches allowed in probe
 max_amplicon_size: 500              # maximum amplicon size (bp)
 
@@ -145,8 +145,9 @@ from any analysis directory containing your `assemblies/` directory and an updat
 primeval --run-name Vpop
 ```
 
-Results are written to `results/Vpop_<date>/` (`amplicons/`, `blast/`,
-`reports/`, and `run.log`). Options:
+Results are written to `<results_dir>/Vpop_<date>/` (`amplicons/`, `blast/`,
+`reports/`, and `run.log`), where `<results_dir>` comes from `results_dir` in
+`config.yaml` (default `results`). Options:
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -260,7 +261,7 @@ primeval reports a detection call per assay per assembly using thresholds set in
 | Parameter               | Default | Rationale                                                                                                                                                                                                                         |
 | ----------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `max_primer_mismatches` | 2       | A primer with one or two **internal** mismatches still typically primes efficiently; this tolerates strain-level SNPs while excluding poor binders. Counted IUPAC-aware (a degenerate base matches any of its represented bases). |
-| `prime3_exact_nt`       | 3       | Mismatches at the 3′ terminus inhibit polymerase extension, so the last several bases must match exactly regardless of `max_primer_mismatches`.                                                                                   |
+| `prime3_exact_nt`       | 1       | A mismatch at the 3′-terminal base reliably blocks polymerase extension, so the final base must match exactly regardless of `max_primer_mismatches`. A single 3′-penultimate mismatch usually still amplifies (at reduced efficiency), so it is counted against the mismatch budget instead; raise to 2–3 for stricter extension-critical filtering. |
 | `max_probe_mismatches`  | 1       | Used for probe-based assays only. Hydrolysis probes tolerate less mismatch than primers, so the default is stricter.                                                                                                              |
 | `max_amplicon_size`     | 500     | Typical qPCR/dPCR amplicons are ~70–200 bp; 500 bp captures valid products while rejecting spurious long-range primer pairings.                                                                                                  |
 
