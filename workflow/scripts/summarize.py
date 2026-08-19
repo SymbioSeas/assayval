@@ -373,6 +373,9 @@ def main():
                    type=lambda x: x.lower() == 'true', default=True)
     p.add_argument('--keep-blast', type=lambda x: x.lower() == 'true', default=False)
     p.add_argument('--keep-logs', type=lambda x: x.lower() == 'true', default=False)
+    p.add_argument('--rescored-from', default='',
+                   help="Path of the run whose cached BLAST output this run re-scored "
+                        "(empty on a normal run); recorded in run_manifest.txt.")
     args = p.parse_args()
 
     reports = Path(args.reports_dir)
@@ -437,6 +440,11 @@ def main():
         'keep_blast': args.keep_blast,
         'keep_logs': args.keep_logs,
     }
+    # Provenance for re-scored runs: which run's cached BLAST output this one
+    # was derived from. Omitted entirely on a normal run so manifests from
+    # ordinary runs are unchanged.
+    if args.rescored_from:
+        params['rescored_from'] = args.rescored_from
     counts = {
         'assemblies_analyzed': int(joined['accession'].nunique()),
         'metadata_rows': int(len(meta)),

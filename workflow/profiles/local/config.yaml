@@ -1,4 +1,4 @@
 cores: 8
-# Runs inside the activated `primeval` conda environment
-# (conda env create -f environment.yaml && conda activate primeval).
+# Runs inside the activated `assayval` conda environment
+# (conda env create -f environment.yaml && conda activate assayval).
 use-conda: false

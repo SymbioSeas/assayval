@@ -1,5 +1,5 @@
 from pathlib import Path
-from primeval import cli
+from assayval import cli
 
 
 def _make_workdir(tmp_path):
@@ -61,7 +61,7 @@ def test_main_respects_results_dir_from_config(tmp_path):
     wd = tmp_path
     (wd / "assemblies").mkdir()
     (wd / "config.yaml").write_text(
-        "assembly_dir: assemblies\nresults_dir: primeval_benchmarking_results\n"
+        "assembly_dir: assemblies\nresults_dir: assayval_benchmarking_results\n"
     )
     captured = {}
 
@@ -71,10 +71,10 @@ def test_main_respects_results_dir_from_config(tmp_path):
 
     rc = cli.main(["--run-name", "Vpop", "--directory", str(wd)], runner=fake_runner)
     assert rc == 0
-    dirs = list((wd / "primeval_benchmarking_results").glob("Vpop_*"))
+    dirs = list((wd / "assayval_benchmarking_results").glob("Vpop_*"))
     assert len(dirs) == 1
     assert not (wd / "results").exists()
-    assert any(a.startswith("results_dir=primeval_benchmarking_results/Vpop_")
+    assert any(a.startswith("results_dir=assayval_benchmarking_results/Vpop_")
                for a in captured["cmd"])
 
 
@@ -88,3 +88,59 @@ def test_main_results_dir_defaults_to_results(tmp_path):
                   runner=lambda c, l: 0)
     assert rc == 0
     assert len(list((wd / "results").glob("Vpop_*"))) == 1
+
+
+# --- re-score mode -------------------------------------------------------------
+
+def _make_cache(wd, name="prev_2026-08-19", n=2):
+    blast = wd / "results" / name / "blast"
+    blast.mkdir(parents=True)
+    for i in range(n):
+        (blast / f"GCF_{i}.tsv.gz").write_bytes(b"")
+    return blast
+
+
+def test_main_rescore_sets_blast_dir_and_thresholds(tmp_path, capsys):
+    wd = _make_workdir(tmp_path)
+    _make_cache(wd)
+    captured = {}
+
+    def fake_runner(cmd, logf):
+        captured["cmd"] = cmd
+        return 0
+
+    rc = cli.main([
+        "--run-name", "sweep_mm1", "--directory", str(wd),
+        "--rescore-from", "results/prev_2026-08-19",
+        "--set", "max_primer_mismatches=1",
+    ], runner=fake_runner)
+    assert rc == 0
+    cmd = captured["cmd"]
+    assert "blast_dir=results/prev_2026-08-19/blast" in cmd
+    assert "max_primer_mismatches=1" in cmd
+    assert cmd.count("--config") == 1
+    out = capsys.readouterr().out
+    assert "re-score" in out and "2 cached BLAST files" in out
+
+
+def test_main_rescore_missing_cache_errors_before_creating_run_dir(tmp_path, capsys):
+    wd = _make_workdir(tmp_path)
+    (wd / "results" / "prev_2026-08-19").mkdir(parents=True)
+    called = []
+
+    rc = cli.main([
+        "--run-name", "sweep", "--directory", str(wd),
+        "--rescore-from", "results/prev_2026-08-19",
+    ], runner=lambda c, l: called.append(c) or 0)
+    assert rc == 2
+    assert called == []
+    assert "keep_blast: true" in capsys.readouterr().err
+    # the failed invocation must not burn a dated run directory
+    assert not list((wd / "results").glob("sweep_*"))
+
+
+def test_main_rejects_malformed_set(tmp_path, capsys):
+    wd = _make_workdir(tmp_path)
+    rc = cli.main(["--directory", str(wd), "--set", "nonsense"], runner=lambda c, l: 0)
+    assert rc == 2
+    assert "KEY=VALUE" in capsys.readouterr().err

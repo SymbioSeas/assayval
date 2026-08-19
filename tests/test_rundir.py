@@ -1,6 +1,6 @@
 from datetime import date
 from pathlib import Path
-from primeval.rundir import resolve_run_dir
+from assayval.rundir import resolve_run_dir
 
 D = date(2026, 7, 7)
 

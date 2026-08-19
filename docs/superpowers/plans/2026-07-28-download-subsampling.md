@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Do NOT commit.** The user commits manually. End each task by running the test suite and leaving changes in the working tree — replace any "commit" step with "run the suite, confirm green."
-- Run tests with the project env on PATH: `PATH="$HOME/miniforge3/envs/primeval/bin:$PATH" python -m pytest -q`. All **128 existing tests must stay green** at every task boundary.
+- Run tests with the project env on PATH: `PATH="$HOME/miniforge3/envs/assayval/bin:$PATH" python -m pytest -q`. All **128 existing tests must stay green** at every task boundary.
 - `scripts/download/subsample.py` uses the **Python standard library only** (match `scripts/download/parse_metadata.py`).
 - Preserve **macOS bash 3.2** compatibility in `download_assemblies.sh` (no `mapfile`; guard `set -u` array expansion as the existing code does; `[[ … =~ … ]]` is fine in 3.2).
 - New CLI flags are **short-flag `getopts`** style matching the existing `-t/-o/-l/-s/-e/-k`: `-n N` (per-taxon cap) and `-r SEED` (default `0`).
@@ -102,7 +102,7 @@ def test_cli_roundtrip(tmp_path):
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `PATH="$HOME/miniforge3/envs/primeval/bin:$PATH" python -m pytest tests/test_subsample.py -q`
+Run: `PATH="$HOME/miniforge3/envs/assayval/bin:$PATH" python -m pytest tests/test_subsample.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'subsample'`.
 
 - [ ] **Step 3: Implement** — create `scripts/download/subsample.py`:
@@ -179,10 +179,10 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run to confirm pass**
 
-Run: `PATH="$HOME/miniforge3/envs/primeval/bin:$PATH" python -m pytest tests/test_subsample.py -q`
+Run: `PATH="$HOME/miniforge3/envs/assayval/bin:$PATH" python -m pytest tests/test_subsample.py -q`
 Expected: PASS (7 passed).
 
-- [ ] **Step 5: Gate** — full suite green: `PATH="$HOME/miniforge3/envs/primeval/bin:$PATH" python -m pytest -q` → `135 passed` (128 + 7). Leave changes unstaged (do not commit).
+- [ ] **Step 5: Gate** — full suite green: `PATH="$HOME/miniforge3/envs/assayval/bin:$PATH" python -m pytest -q` → `135 passed` (128 + 7). Leave changes unstaged (do not commit).
 
 ---
 
@@ -227,7 +227,7 @@ def test_n_zero_rejected(tmp_path):
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `PATH="$HOME/miniforge3/envs/primeval/bin:$PATH" python -m pytest tests/test_download_cli.py -q`
+Run: `PATH="$HOME/miniforge3/envs/assayval/bin:$PATH" python -m pytest tests/test_download_cli.py -q`
 Expected: FAIL (help lacks `-n`/`-r`; bad `-n` currently ignored so exit is 0 or reaches network).
 
 - [ ] **Step 3a: Document the flags** — in `download_assemblies.sh`, in the `# Options:` header comment block, add after the `-s SOURCE` line:
@@ -337,10 +337,10 @@ fi
 
 - [ ] **Step 4: Run to confirm pass**
 
-Run: `PATH="$HOME/miniforge3/envs/primeval/bin:$PATH" python -m pytest tests/test_download_cli.py -q`
+Run: `PATH="$HOME/miniforge3/envs/assayval/bin:$PATH" python -m pytest tests/test_download_cli.py -q`
 Expected: PASS (all, including the three new tests).
 
-- [ ] **Step 5: Gate** — full suite green: `PATH="$HOME/miniforge3/envs/primeval/bin:$PATH" python -m pytest -q` → `138 passed` (135 + 3). Leave changes unstaged.
+- [ ] **Step 5: Gate** — full suite green: `PATH="$HOME/miniforge3/envs/assayval/bin:$PATH" python -m pytest -q` → `138 passed` (135 + 3). Leave changes unstaged.
 
 ---
 
@@ -386,7 +386,7 @@ takes all of them.
 **Curated sets:** subsampling is for scaling down broad taxa, not for building a
 specific positive set. If you need particular genomes (e.g. an allele-diverse set
 of a resistance gene's carriers), download them directly and drop the `.fna`
-files into your `assembly_dir` — primeval reads any `.fna`:
+files into your `assembly_dir` — AssayVal reads any `.fna`:
 
 ```bash
 datasets download genome accession GCF_XXXXXXXXX.1 --include genome

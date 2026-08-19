@@ -1,7 +1,7 @@
 executor: slurm
 jobs: 200
-# Runs inside the activated `primeval` conda environment on each node
-# (conda env create -f environment.yaml && conda activate primeval).
+# Runs inside the activated `assayval` conda environment on each node
+# (conda env create -f environment.yaml && conda activate assayval).
 use-conda: false
 default-resources:
   mem_mb: 4000

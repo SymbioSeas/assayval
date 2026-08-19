@@ -28,7 +28,7 @@ from summarize import (
 # --- Fixtures ---
 
 def make_detection_df(accessions, assays, call='Detected', n_amplicons=1):
-    """Build a minimal detection DataFrame (like output of run_ispcr)."""
+    """Build a minimal detection DataFrame (like output of run_detection)."""
     rows = []
     for acc in accessions:
         for assay in assays:

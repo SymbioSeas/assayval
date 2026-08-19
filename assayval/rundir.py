@@ -1,4 +1,4 @@
-"""Resolve the results directory for a primeval run."""
+"""Resolve the results directory for an AssayVal run."""
 from datetime import date as _date
 from pathlib import Path
 

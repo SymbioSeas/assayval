@@ -1,17 +1,17 @@
-# primeval: in silico PCR assay validation
+# AssayVal: in silico PCR assay validation
 
-**primeval** evaluates the sensitivity and specificity of PCR assays (including probe-based assays designed for dPCR/qPCR) against a user-provided set of genome assemblies. For each assay, it identifies valid amplicons using BLAST-based primer alignment and reports detection calls, mismatch counts, and amplicon sizes per assembly.
+**AssayVal** evaluates the sensitivity and specificity of PCR assays (including probe-based assays designed for dPCR/qPCR) against a user-provided set of genome assemblies. For each assay, it identifies valid amplicons using BLAST-based primer alignment and reports detection calls, mismatch counts, and amplicon sizes per assembly.
 
 ## Two tools in this repository
 
 | Tool                         | Location                                    | Purpose                                                                                                                                                                                                                                               |
 | ---------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **primeval**      | repository root (`workflow/`, `config/`, …) | Validate PCR assays in silico against a set of genome assemblies.                                                                                                                                                                                     |
+| **AssayVal**      | repository root (`workflow/`, `config/`, …) | Validate PCR assays in silico against a set of genome assemblies.                                                                                                                                                                                     |
 | **assay-design** | [`assay-design/`](assay-design/)            | Identify clade-conserved / clade-specific orthologs from a Panaroo pangenome and extract representative sequences. This is the candidate-gene discovery step used to develop the Vpop assays. See [`assay-design/README.md`](assay-design/README.md). |
 
 Both tools share the single conda environment defined in `environment.yaml`.
 
-Once installed (below), each tool has a command on your PATH: **`primeval`**
+Once installed (below), each tool has a command on your PATH: **`assay-val`**
 and **`assay-design`**. Run either with `--help`.
 
 ## Features
@@ -53,22 +53,22 @@ RAM for the final aggregation step.
 ## Installation
 
 ```bash
-git clone https://github.com/SymbioSeas/primeval.git
-cd primeval
+git clone https://github.com/SymbioSeas/assayval.git
+cd assayval
 conda env create -f environment.yaml
-conda activate primeval
+conda activate assayval
 pip install -e .
 ```
 
 The pipeline runs inside this activated environment; the Snakemake profiles set
 `use-conda: false` so no per-rule environments are built. The `pip install -e .`
-step installs the package and puts three commands onto your PATH: **`primeval`**, 
+step installs the package and puts three commands onto your PATH: **`assay-val`**, 
 **`assay-design`**, and **`download-assemblies`** (the assembly-download helper).
 
 
 ### Installing on Windows
 
-primeval runs on Windows through **WSL2** (Windows Subsystem for Linux), which
+AssayVal runs on Windows through **WSL2** (Windows Subsystem for Linux), which
 provides a real Linux environment. Native Windows is not supported because NCBI
 BLAST+ is distributed for Linux/macOS only via Bioconda.
 
@@ -110,7 +110,7 @@ Copy the config template into your analysis directory (the folder holding your
 assemblies and set detection thresholds:
 
 ```bash
-cp /path/to/primeval/config/config.yaml ./config.yaml
+cp /path/to/assayval/config/config.yaml ./config.yaml
 ```
 
 ```yaml
@@ -138,11 +138,11 @@ Create a CSV file named `assay_table.csv` with one row per assay (see [Assay tab
 
 ### 4. Run
 
-`primeval` is installed on your PATH (see [Installation](#installation)). Run it
+`assay-val` is installed on your PATH (see [Installation](#installation)). Run it
 from any analysis directory containing your `assemblies/` directory and an updated `config.yaml` file:
 
 ```bash
-primeval --run-name Vpop
+assay-val --run-name Vpop
 ```
 
 Results are written to `<results_dir>/Vpop_<date>/` (`amplicons/`, `blast/`,
@@ -156,10 +156,12 @@ Results are written to `<results_dir>/Vpop_<date>/` (`amplicons/`, `blast/`,
 | `--configfile FILE` | `<dir>/config.yaml` | Pipeline configuration. |
 | `--force` | off | Reuse today's `<NAME>_<date>/` and resume unfinished work. |
 | `--cores N` | 8 | CPU cores. |
+| `--set KEY=VALUE` | – | Override one config value for this run; repeatable. Mainly for detection thresholds, e.g. `--set max_primer_mismatches=1`. |
+| `--rescore-from RUN_DIR` | – | Re-score a previous run's retained BLAST output instead of running BLAST again. See [Threshold sensitivity analysis](#threshold-sensitivity-analysis-re-scoring). |
 
 Re-running the same name on the same day without `--force` creates
 `<NAME>_<date>_2`, `_3`, … so previous results are never overwritten. Anything
-after `--` is passed straight to Snakemake (e.g. `primeval --run-name Vpop -- -n`
+after `--` is passed straight to Snakemake (e.g. `assay-val --run-name Vpop -- -n`
 for a dry run). Set `keep_blast: true` in `config.yaml` to retain the raw
 per-assembly BLAST output (see [System requirements](#system-requirements)), or
 `keep_logs: true` to retain the per-assembly `logs/` directory (both are deleted
@@ -184,7 +186,7 @@ The assay table is a CSV file with the following columns:
 | ------- | -------- | ----------------------------------------------------------------------------------------- |
 | `assay` | Yes      | Unique assay name (used in all output files)                                              |
 | `fwd`   | Yes      | Forward primer sequence (5′-3′)                                                           |
-| `rev`   | Yes      | Reverse primer sequence (5′-3′, same orientation as fwd - primeval handles RC internally) |
+| `rev`   | Yes      | Reverse primer sequence (5′-3′, same orientation as fwd - AssayVal handles RC internally) |
 | `probe` | Column yes, value no | Probe sequence (5′-3′). The **column must be present**, but leave the value empty to declare a probe-free (SYBR/dsDNA-dye) assay. See [Probe-free assays](#probe-free-assays). |
 | `target_group` | No (column may be omitted) | The metadata group this assay is designed to detect, as `column:value` (e.g. `phenotype:protective`, `species:Vibrio mediterranei`). A bare value (no colon) is matched against the primary `group_by` column. Drives `assay_performance.csv`. |
 | `target_gene` | No (column may be omitted) | Free-text gene/target label. Not used in detection; carried through to `assay_performance.csv` if present. |
@@ -200,13 +202,13 @@ present**. The run fails with `Assay table missing required columns` if any is a
 and may be omitted entirely.
 
 **Extra columns:** you may add any additional columns to `assay_table.csv` (e.g.
-`reference`, `notes`) to keep your work organized; primeval ignores them. The one
+`reference`, `notes`) to keep your work organized; AssayVal ignores them. The one
 exception is `target_gene` — if you include it, it is carried through to
 `assay_performance.csv` alongside `fwd`, `rev`, and `probe` to make your life easier.
 
 ### Probe-free assays
 
-Leave `probe` empty for SYBR/dsDNA-dye chemistry. primeval then requires only a valid
+Leave `probe` empty for SYBR/dsDNA-dye chemistry. AssayVal then requires only a valid
 amplicon to call a detection: no probe oligo is searched, and the `Primer Only` call is
 structurally unreachable for that assay. Any valid amplicon is `Detected`, and
 `Not Detected` means no valid amplicon was found. This mirrors the chemistry, where any
@@ -240,7 +242,7 @@ group_by: ["species", "phenotype"]  # a detection matrix + heatmap per column
 
 Grouping-column **names** must not contain whitespace (use e.g. `isolation_source`, not `isolation source`).
 
-If you used `download-assemblies`, the generated `metadata.csv` carries NCBI ANI/BioSample fields and primeval **auto-groups by ANI-derived species** when `group_by` is unset. If you bring your own `metadata.csv` without those NCBI columns, you must set `group_by`. When you set `group_by`, assemblies missing from `metadata.csv` or with an empty cell in a grouping column are still analyzed and reported under `Ungrouped`. In the default ANI-auto mode (no `group_by`), only species-confident assemblies get their own group; assemblies that are only genus-resolvable, unclassified, or otherwise low-confidence fold into a single `Unclassified (low confidence ANI)` group. Each assembly's tier is still retained per-assembly as `ani_confidence` (`High`/`Genus`/`Low`) in `detection_by_assembly.csv`, and the run manifest reports the high/genus/low counts.
+If you used `download-assemblies`, the generated `metadata.csv` carries NCBI ANI/BioSample fields and AssayVal **auto-groups by ANI-derived species** when `group_by` is unset. If you bring your own `metadata.csv` without those NCBI columns, you must set `group_by`. When you set `group_by`, assemblies missing from `metadata.csv` or with an empty cell in a grouping column are still analyzed and reported under `Ungrouped`. In the default ANI-auto mode (no `group_by`), only species-confident assemblies get their own group; assemblies that are only genus-resolvable, unclassified, or otherwise low-confidence fold into a single `Unclassified (low confidence ANI)` group. Each assembly's tier is still retained per-assembly as `ani_confidence` (`High`/`Genus`/`Low`) in `detection_by_assembly.csv`, and the run manifest reports the high/genus/low counts.
 
 Because grouping columns are independent, an assay can be scored against a different resolution than the one used to lay out a matrix (e.g. group the report by `species` while scoring a nested clade assay with `target_group: phenotype:protective`).
 
@@ -255,7 +257,7 @@ GCF_000000002.1,Vibrio harveyi,
 
 ## Detection thresholds
 
-primeval reports a detection call per assay per assembly using thresholds set in
+AssayVal reports a detection call per assay per assembly using thresholds set in
 `config/config.yaml`. The defaults reflect PCR biochemistry:
 
 | Parameter               | Default | Rationale                                                                                                                                                                                                                         |
@@ -273,9 +275,30 @@ primeval reports a detection call per assay per assembly using thresholds set in
 **Interpreting `Primer Only`:** both primers bind and would amplify, but the probe site is diverged or absent. For a hydrolysis-probe (dPCR/qPCR) assay this usually means **no fluorescent signal** despite amplification, so `assay_performance.csv` counts it as a non-detection; for SYBR/probe-free chemistry any valid amplicon is a detection. `pct_detected_or_primer` in the summaries lets you see both interpretations.
 
 The BLAST search itself is run with deliberately permissive settings
-(`evalue=1000`, `perc_identity=70`, `word_size=7`, tuned for short oligo
-queries) to avoid candidate binding site being missed; stringency is enforced
-downstream by the mismatch, 3′-exact, and amplicon-size filters above.
+(`evalue=1000`, `perc_identity=70`, `word_size=4`, `max_target_seqs=50000`) so
+that no candidate binding site is missed; stringency is enforced downstream by
+the mismatch, 3′-exact, and amplicon-size filters above.
+
+Two of those defaults deserve their rationale spelled out, because the obvious
+choices are wrong in ways that fail silently:
+
+- **`word_size: 4`, not blastn-short's default of 7.** Every BLAST hit must
+  contain at least one exact run of word-length, so an oligo whose mismatches
+  break it into runs shorter than the word size is never seeded — it is
+  invisible regardless of how permissive `max_primer_mismatches` is. The blind
+  spot grows sharply as oligos shorten: at `word_size 7` it hides 7.4% of
+  two-mismatch placements in a 17-mer primer, and 7.7% of *single*-mismatch
+  placements in a 13-mer MGB probe. `word_size 4` is the minimum blastn allows
+  and reduces that to zero for every oligo length and mismatch budget in normal
+  use. It is also
+  [simulate_PCR](https://doi.org/10.1186/1471-2105-15-237)'s default, for the
+  same reason. Raise it only to trade sensitivity for speed.
+- **`max_target_seqs: 50000`.** blastn defaults to 500. Because primeval builds
+  one database per assembly, the *subjects* are contigs, and a fragmented draft
+  assembly can exceed that cap — at which point hits are dropped during the
+  search rather than ranked and truncated afterwards
+  ([Shah et al. 2019](https://doi.org/10.1093/bioinformatics/bty833)). Setting
+  it far above any plausible contig count removes the failure mode.
 
 ### Terminal mismatches and BLAST end-trimming
 
@@ -288,7 +311,7 @@ mismatch near a primer end — no matter how permissive `max_primer_mismatches`
 is — producing systematic false negatives for assays whose only template
 variation sits at a primer terminus.
 
-primeval instead **reconstructs** each gapless hit to full oligo length: the
+AssayVal instead **reconstructs** each gapless hit to full oligo length: the
 un-aligned oligo ends are mapped onto the assembly via the hit coordinates,
 the complete window is re-read from the genome sequence (reverse-complemented
 for minus-strand hits; positions beyond a contig edge are treated as
@@ -298,6 +321,74 @@ the `max_primer_mismatches` budget — consistent with their minimal effect on
 priming — while 3′-terminal mismatches remain governed by the strict
 `prime3_exact_nt` rule. Probes are handled the same way against
 `max_probe_mismatches`.
+
+---
+
+## Threshold sensitivity analysis (re-scoring)
+
+The [detection thresholds](#detection-thresholds) above are defensible defaults,
+not tuned parameters, and a reviewer is entitled to ask whether a reported
+sensitivity or specificity is an artifact of where those cutoffs were drawn. The
+honest answer is to vary them and show what happens.
+
+Re-running the whole pipeline per threshold setting is the obvious way to do that
+and the wrong one: BLAST dominates the cost of a run (roughly 15 MB of transient
+output per assembly, ~158 GB for the 10,715-assembly *Vibrionaceae* set), and the
+BLAST search does not depend on the thresholds at all — only the scoring does.
+`--rescore-from` separates the two. Run BLAST once, keep it, then score it as many
+times as you like:
+
+```bash
+# 1. one full run, with keep_blast: true set in config.yaml
+assay-val --run-name Vpop
+
+# 2. re-score it at a different threshold setting — no BLAST, minutes not hours
+assay-val --run-name Vpop_mm1_p3x2 \
+  --rescore-from results/Vpop_<date> \
+  --set max_primer_mismatches=1 \
+  --set prime3_exact_nt=2
+```
+
+Each re-score writes a complete, independent run directory — its own
+`amplicons/`, `reports/`, heatmaps and `assay_performance.csv` — so the outputs
+are directly comparable with the original run. `run_manifest.txt` records the
+thresholds used **and** a `rescored_from` line naming the source run, so every
+cell of a sweep is self-documenting.
+
+A full grid is a shell loop:
+
+```bash
+SRC=results/Vpop_<date>
+for mm in 0 1 2 3; do
+  for p3 in 1 2 3; do
+    assay-val --run-name "Vpop_mm${mm}_p3x${p3}" --rescore-from "$SRC" \
+      --set max_primer_mismatches=$mm --set prime3_exact_nt=$p3
+  done
+done
+```
+
+Then collate `results/Vpop_mm*/reports/assay_performance.csv` (each carries its
+own `assay`, `sensitivity` and `specificity` columns) to plot sensitivity and
+specificity against threshold, one panel per assay.
+
+**Requirements and caveats**
+
+- The source run must have been run with `keep_blast: true`. Without it each
+  BLAST TSV is deleted as it is consumed and there is nothing to re-score;
+  `--rescore-from` fails immediately and says so.
+- **The assemblies must still be present.** Scoring is not a pure function of the
+  BLAST output: `detect.py` re-reads each genome to rebuild BLAST end-trimmed
+  hits to full oligo length (see [Terminal mismatches and BLAST
+  end-trimming](#terminal-mismatches-and-blast-end-trimming)). `assembly_dir`
+  must still resolve.
+- The work set is taken from the cached BLAST output, not from `assembly_dir`, so
+  re-scoring a subsampled run stays subsampled even if the assembly directory has
+  since grown.
+- `--set` accepts any config key, but changing anything that feeds the BLAST
+  search itself (`assay_table`, `blast_*`) is meaningless in re-score mode: those
+  results are baked into the cache. Change an assay and you need a full run.
+- Re-scoring is not free — the detection step still runs per assembly — but it
+  skips the database build and the search, which is where the time and disk go.
 
 ---
 
@@ -353,7 +444,7 @@ results/<run-name>_<date>/
 
 ## Interpreting `assay_performance.csv`
 
-For every assay carrying a `target_group`, primeval classifies **each assembly in the run**
+For every assay carrying a `target_group`, AssayVal classifies **each assembly in the run**
 two ways and cross-tabulates them:
 
 - **Truth** — is this assembly in the assay's intended target group? (i.e. does
@@ -394,7 +485,7 @@ that matches no assemblies yields `n_target = 0`, a blank `sensitivity`, and a w
 
 - **These are in silico predictions, not wet-lab performance.** They report whether the primers
   and probe have acceptable binding sites in each genome under the configured
-  [detection thresholds](#detection-thresholds). Primeval does NOT test amplification efficiency, Tm, secondary
+  [detection thresholds](#detection-thresholds). AssayVal does NOT test amplification efficiency, Tm, secondary
   structure, or partitioning behaviour. Read them as the sequence-level expectation that
   empirical validation is tested against.
 - **Every denominator is your input assembly set.** `specificity = 100` means "no off-target
@@ -462,7 +553,7 @@ cp config/ncbi_credentials.example.sh config/ncbi_credentials.sh
 ```
 
 `download-assemblies` sources this file automatically on every run.
-To keep the key elsewhere, point `PRIMEVAL_CREDENTIALS` at your own file.
+To keep the key elsewhere, point `ASSAYVAL_CREDENTIALS` at your own file.
 
 The key is resolved as: **`-k` flag → `NCBI_API_KEY` environment variable →
 credentials file** (first one set wins).
@@ -506,7 +597,7 @@ covers every assembly downloaded across all three invocations.
 **Curated sets:** subsampling is for scaling down broad taxa, not for building a
 specific positive set. If you need particular genomes (e.g. an allele-diverse set
 of a resistance gene's carriers), download them directly and drop the `.fna`
-files into your `assembly_dir` — primeval reads any `.fna`:
+files into your `assembly_dir` — AssayVal reads any `.fna`:
 
 ```bash
 datasets download genome accession GCF_XXXXXXXXX.1 --include genome
@@ -515,7 +606,7 @@ datasets download genome accession GCF_XXXXXXXXX.1 --include genome
 
 ### HPC / SLURM
 
-Local available storage requirements for primeval are directly scaled by the assembly dataset provided (i.e., you need space to store the downloaded assemblies you provide primeval!). If needed, primeval runs can easily be submitted in a SLURM environment using the wrapper below.
+Local available storage requirements for AssayVal are directly scaled by the assembly dataset provided (i.e., you need space to store the downloaded assemblies you provide AssayVal!). If needed, AssayVal runs can easily be submitted in a SLURM environment using the wrapper below.
 
 Wrap the command in an sbatch job for large downloads:
 
@@ -530,17 +621,17 @@ sbatch --time=24:00:00 --mem=8G \
 
 ## Assay specificity validation
 
-primeval tests assay sensitivity and specificity against **your input assembly dataset**. The scope of specificity testing is therefore determined by which assemblies you provide.
+AssayVal tests assay sensitivity and specificity against **your input assembly dataset**. The scope of specificity testing is therefore determined by which assemblies you provide.
 
 **Recommended workflow for specificity screening:**
 
 1. **Single-primer BLAST screen** (NCBI web interface): Individually BLAST each primer and probe sequence against the NCBI `nt` database, *excluding* your target taxon. This identifies any off-target binding sites outside your group of interest. If no hits are returned for any oligo, off-target amplification outside the taxon is extremely unlikely (a primer must bind for any amplicon to form).
 
-2. **Expand the input dataset if needed**: If step 1 returns hits in a non-target taxon, download assemblies from that taxon and add them to your `assembly_dir`. primeval will then determine whether those single-primer hits form complete, detectable amplicons.
+2. **Expand the input dataset if needed**: If step 1 returns hits in a non-target taxon, download assemblies from that taxon and add them to your `assembly_dir`. AssayVal will then determine whether those single-primer hits form complete, detectable amplicons.
 
 This two-stage approach is computationally efficient, such that you only download and evaluate assemblies in taxa where off-target primer binding is possible.
 
-Step 1 is a manual pre-screen performed through the NCBI web interface; it is not part of the reproducible primeval pipeline. The reproducible specificity evidence for a manuscript comes from primeval's `assay_performance.csv` over your assembled dataset (Step 2 onward).
+Step 1 is a manual pre-screen performed through the NCBI web interface; it is not part of the reproducible AssayVal pipeline. The reproducible specificity evidence for a manuscript comes from AssayVal's `assay_performance.csv` over your assembled dataset (Step 2 onward).
 
 > **In the future:** A future release will support BLASTing directly against NCBI pre-built reference databases (e.g., `ref_prok_rep_genomes`) as a single-step broader specificity check, without requiring manual assembly downloads.
 
@@ -564,7 +655,7 @@ metadata: "test_data/assemblies/metadata.csv"
 And run from the repo root (using the repo's config directly):
 
 ```bash
-primeval --run-name test --configfile config/config.yaml
+assay-val --run-name test --configfile config/config.yaml
 ```
 
 The test dataset covers all detection scenarios: `Detected` (including via minus-strand primer binding), `Primer Only`, and `Not Detected`.
@@ -589,7 +680,7 @@ VmedA,GCTACGCCC…,GCGCGTGAT…,ACGACCTTC…,species:Vibrio mediterranei,species
 
 ## assay-design — clade-specific target discovery
 
-**assay-design** is the companion tool used to *design* the assays that primeval
+**assay-design** is the companion tool used to *design* the assays that AssayVal
 validates. It parses a [Panaroo](https://gtonkinhill.github.io/panaroo/)
 pangenome to find orthologs that are conserved within a clade and specific to it
 (absent elsewhere), then extracts representative protein/nucleotide sequences —
@@ -614,10 +705,10 @@ full usage, see the [assay-design README](assay-design/README.md).
 
 ## Citation
 
-If you use primeval, please cite the archived release (TBD!):
+If you use AssayVal, please cite the archived release (TBD!):
 
 > Smith S, et al. (2026) *[manuscript title]*. *[journal]*. doi:[doi]
-> primeval [version] (2026). Zenodo. doi:[zenodo-doi]
+> AssayVal [version] (2026). Zenodo. doi:[zenodo-doi]
 
 ---
 

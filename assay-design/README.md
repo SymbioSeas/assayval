@@ -1,12 +1,12 @@
 # assay-design: clade-specific ortholog discovery
 
-Companion tool to [primeval](../README.md). `assay-design` parses a
+Companion tool to [AssayVal](../README.md). `assay-design` parses a
 [Panaroo](https://gtonkinhill.github.io/panaroo/) pangenome to find orthologs
 that are **conserved within** a clade and **specific to** the clade (absent from the
 rest of the dataset), then extracts representative protein and nucleotide
 sequences. These clade-specific genes are the candidate targets from which the
 Vpop dPCR assays were designed; the resulting amplicons are then validated with
-primeval.
+AssayVal.
 
 ## Workflow
 
@@ -20,16 +20,16 @@ Both stages are wrapped by the `assay-design` command.
 
 ## Environment
 
-Uses primeval's single top-level environment, so no separate install is required:
+Uses AssayVal's single top-level environment, so no separate install is required:
 
 ```bash
-cd primeval
+cd assayval
 conda env create -f environment.yaml   # if not already created
-conda activate primeval
+conda activate assayval
 pip install -e .                       # if not already installed
 ```
 
-Installing the package puts both the `primeval` and `assay-design` commands on
+Installing the package puts both the `assay-val` and `assay-design` commands on
 your PATH. Only `python`, `pandas`, and `numpy` are needed for this tool (all
 included in that environment).
 
@@ -69,7 +69,7 @@ nucleotide sequences for each ortholog directly from `gene_data.csv`.
 ## Usage
 
 Run both stages on one dataset with the `assay-design` command (installed on your
-PATH by the primeval conda environment):
+PATH by the AssayVal conda environment):
 
 ```bash
 assay-design \

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # download_test_data.sh
 #
-# Download the 5 test assemblies used to validate primeval.
+# Download the 5 test assemblies used to validate AssayVal.
 # Requires: NCBI datasets CLI (conda install -c conda-forge ncbi-datasets-cli)
 #
 # Usage: bash test_data/download_test_data.sh
@@ -62,7 +62,7 @@ python3 "${PARSER}" --jsonl "${JSONL}" --out "${OUTDIR}/metadata.csv"
 echo ""
 echo "Done. Test assemblies are in ${OUTDIR}/"
 echo ""
-echo "To run primeval on the test dataset, edit config/config.yaml:"
+echo "To run AssayVal on the test dataset, edit config/config.yaml:"
 echo "  assembly_dir: \"test_data/assemblies\""
 echo "  metadata:     \"test_data/assemblies/metadata.csv\""
 echo ""

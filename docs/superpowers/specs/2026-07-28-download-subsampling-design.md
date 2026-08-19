@@ -15,7 +15,7 @@ use case) unchanged.
 
 - `--accessions <file>` curated-list input. Curated, allele-diverse positive
   sets (e.g. for AMR-gene sensitivity) are handled by side-loading `.fna` files
-  into `assembly_dir` — primeval reads any `.fna`, so no code is needed. This is
+  into `assembly_dir` — AssayVal reads any `.fna`, so no code is needed. This is
   documented, not built.
 - Quality- or representative-weighted selection (e.g. prefer complete/reference
   genomes). Selection is uniform-random within the already-applied

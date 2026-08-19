@@ -1,4 +1,4 @@
-# primeval NCBI credentials — OPTIONAL, for faster assembly downloads
+# AssayVal NCBI credentials — OPTIONAL, for faster assembly downloads
 #
 # Set your NCBI API key here ONCE and the download helper
 # (scripts/download/download_assemblies.sh) applies it on every run.

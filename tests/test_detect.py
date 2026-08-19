@@ -4,7 +4,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "workflow" / "scripts"))
 
 import pytest
 import pandas as pd
-from run_ispcr import (
+from detect import (
     check_3prime_exact,
     filter_primer_hits,
     find_valid_amplicons,
@@ -385,11 +385,11 @@ def test_load_blast_nonexistent_file(tmp_path):
     assert list(df.columns) == BLAST_COLS
 
 
-# --- run_ispcr integration ---
+# --- run_detection integration ---
 
-def test_run_ispcr_integration(tmp_path):
+def test_run_detection_integration(tmp_path):
     """End-to-end test: one assay, one assembly, full detection."""
-    from run_ispcr import run_ispcr
+    from detect import run_detection
 
     fwd_seq = "AGCCGAGCGTTACCAGC"                  # 17 nt, at 100..116 (+)
     rev_seq = "CGAACGCAATGATTCTCTGAGC"             # 22 nt, revcomp at 279..300
@@ -413,17 +413,16 @@ def test_run_ispcr_integration(tmp_path):
     fna_path.write_text(f">contig1\n{seq}\n")
 
     # BLAST TSV: fwd hit (+strand), rev hit (-strand), probe hit within amplicon
+    # Columns are qseqid sseqid length gapopen qstart qend sstart send, matching
+    # BLAST_COLS and the -outfmt in workflow/rules/blast.smk.
     blast_tsv = tmp_path / "blast.tsv"
     blast_tsv.write_text(
-        "\t".join(["VhPath_fwd", "contig1", "100.0", "17", "0", "0",
-                   "1", "17", "100", "116", "0.001", "32.0", fwd_seq, fwd_seq]) + "\n" +
-        "\t".join(["VhPath_rev", "contig1", "100.0", "22", "0", "0",
-                   "1", "22", "300", "279", "0.001", "44.0", rev_seq, rev_seq]) + "\n" +
-        "\t".join(["VhPath_probe", "contig1", "100.0", "25", "0", "0",
-                   "1", "25", "150", "174", "0.001", "50.0", probe_seq, probe_seq]) + "\n"
+        "\t".join(["VhPath_fwd", "contig1", "17", "0", "1", "17", "100", "116"]) + "\n" +
+        "\t".join(["VhPath_rev", "contig1", "22", "0", "1", "22", "300", "279"]) + "\n" +
+        "\t".join(["VhPath_probe", "contig1", "25", "0", "1", "25", "150", "174"]) + "\n"
     )
 
-    det_df = run_ispcr(
+    det_df = run_detection(
         blast_tsv=str(blast_tsv),
         assay_table=str(assay_csv),
         fna_path=str(fna_path),
@@ -444,9 +443,9 @@ def test_run_ispcr_integration(tmp_path):
     assert '100' in str(row['amplicon_starts']) and '300' in str(row['amplicon_ends'])
 
 
-def test_run_ispcr_not_detected(tmp_path):
+def test_run_detection_not_detected(tmp_path):
     """No BLAST hits → Not Detected for all assays."""
-    from run_ispcr import run_ispcr
+    from detect import run_detection
 
     assay_csv = tmp_path / "assay_table.csv"
     assay_csv.write_text(
@@ -458,7 +457,7 @@ def test_run_ispcr_not_detected(tmp_path):
     blast_tsv = tmp_path / "blast.tsv"
     blast_tsv.write_text("")  # empty file
 
-    det_df = run_ispcr(
+    det_df = run_detection(
         blast_tsv=str(blast_tsv),
         assay_table=str(assay_csv),
         fna_path=str(fna_path),
@@ -727,11 +726,11 @@ def test_reconstruct_unknown_contig_dropped():
     assert len(out) == 0
 
 
-def test_run_ispcr_multiple_assays_no_state_leak(tmp_path):
+def test_run_detection_multiple_assays_no_state_leak(tmp_path):
     """Regression: the loaded genome dict must survive across assay iterations
     (call_detection's returned contig-id string once shadowed it, breaking
     every assay after the first)."""
-    from run_ispcr import run_ispcr
+    from detect import run_detection
 
     fwd_seq = "AGCCGAGCGTTACCAGC"
     rev_seq = "CGAACGCAATGATTCTCTGAGC"
@@ -751,16 +750,13 @@ def test_run_ispcr_multiple_assays_no_state_leak(tmp_path):
 
     rows = []
     for assay in ("AssayA", "AssayB"):
-        rows.append("\t".join([f"{assay}_fwd", "contig1", "100.0", "17", "0", "0",
-                               "1", "17", "100", "116", "0.001", "32.0", fwd_seq, fwd_seq]))
-        rows.append("\t".join([f"{assay}_rev", "contig1", "100.0", "22", "0", "0",
-                               "1", "22", "300", "279", "0.001", "44.0", rev_seq, rev_seq]))
-        rows.append("\t".join([f"{assay}_probe", "contig1", "100.0", "25", "0", "0",
-                               "1", "25", "150", "174", "0.001", "50.0", probe_seq, probe_seq]))
+        rows.append("\t".join([f"{assay}_fwd", "contig1", "17", "0", "1", "17", "100", "116"]))
+        rows.append("\t".join([f"{assay}_rev", "contig1", "22", "0", "1", "22", "300", "279"]))
+        rows.append("\t".join([f"{assay}_probe", "contig1", "25", "0", "1", "25", "150", "174"]))
     blast_tsv = tmp_path / "blast.tsv"
     blast_tsv.write_text("\n".join(rows) + "\n")
 
-    det_df = run_ispcr(
+    det_df = run_detection(
         blast_tsv=str(blast_tsv),
         assay_table=str(assay_csv),
         fna_path=str(fna_path),
@@ -773,3 +769,118 @@ def test_run_ispcr_multiple_assays_no_state_leak(tmp_path):
 
     assert len(det_df) == 2
     assert list(det_df['detection_call']) == ['Detected', 'Detected']
+
+
+# --- BLAST input contract: column set and gzip handling ---------------------
+
+def test_blast_cols_match_the_outfmt_in_blast_smk():
+    """BLAST_COLS must match -outfmt in workflow/rules/blast.smk exactly.
+
+    A silent drift here mislabels every column of every hit, so pin it.
+    """
+    smk = (Path(__file__).parent.parent / "workflow" / "rules" / "blast.smk").read_text()
+    outfmt = smk.split('-outfmt "6 ', 1)[1].split('"', 1)[0].split()
+    assert outfmt == BLAST_COLS
+
+
+def test_load_blast_results_reads_gzipped_output(tmp_path):
+    import gzip
+    p = tmp_path / "blast.tsv.gz"
+    with gzip.open(p, "wt") as fh:
+        fh.write("\t".join(["A_fwd", "contig1", "17", "0", "1", "17", "100", "116"]) + "\n")
+    df = load_blast_results(str(p))
+    assert list(df.columns) == BLAST_COLS
+    assert len(df) == 1
+    assert df.iloc[0]['sseqid'] == 'contig1'
+    assert int(df.iloc[0]['sstart']) == 100
+
+
+def test_load_blast_results_handles_empty_gzip(tmp_path):
+    """An assembly with no hits gzips to a ~20-byte header, not 0 bytes, so the
+    size check does not catch it and the parse must."""
+    import gzip
+    p = tmp_path / "blast.tsv.gz"
+    with gzip.open(p, "wt") as fh:
+        fh.write("")
+    assert p.stat().st_size > 0
+    df = load_blast_results(str(p))
+    assert df.empty
+    assert list(df.columns) == BLAST_COLS
+
+
+def test_run_detection_reads_gzipped_blast(tmp_path):
+    """End-to-end through the gzipped path: same call as the plain-text case."""
+    import gzip
+    from detect import run_detection
+
+    fwd_seq = "AGCCGAGCGTTACCAGC"
+    rev_seq = "CGAACGCAATGATTCTCTGAGC"
+    probe_seq = "ACGGGACAAAAAGGATGGCGAGTAC"
+
+    assay_csv = tmp_path / "assay_table.csv"
+    assay_csv.write_text("assay,probe,fwd,rev\n"
+                         f"VhPath,{probe_seq},{fwd_seq},{rev_seq}\n")
+    seq = ("T" * 99 + fwd_seq + "T" * 33 + probe_seq + "T" * 104
+           + revcomp(rev_seq) + "T" * 100)
+    fna_path = tmp_path / "GCF_000001.fna"
+    fna_path.write_text(f">contig1\n{seq}\n")
+
+    blast_gz = tmp_path / "blast.tsv.gz"
+    with gzip.open(blast_gz, "wt") as fh:
+        fh.write("\t".join(["VhPath_fwd", "contig1", "17", "0", "1", "17", "100", "116"]) + "\n")
+        fh.write("\t".join(["VhPath_rev", "contig1", "22", "0", "1", "22", "300", "279"]) + "\n")
+        fh.write("\t".join(["VhPath_probe", "contig1", "25", "0", "1", "25", "150", "174"]) + "\n")
+
+    det_df = run_detection(
+        blast_tsv=str(blast_gz), assay_table=str(assay_csv), fna_path=str(fna_path),
+        max_primer_mismatches=2, prime3_exact_nt=3, max_probe_mismatches=1,
+        max_amplicon_size=500, store_amplicon_sequences=False,
+    )
+    assert det_df.iloc[0]['detection_call'] == 'Detected'
+
+
+def test_blast_smk_sets_max_target_seqs():
+    """blastn defaults -max_target_seqs to 500; with per-assembly databases the
+    subjects are contigs, and fragmented drafts exceed that. Pin that the rule
+    sets it explicitly (Shah et al. 2019, doi:10.1093/bioinformatics/bty833)."""
+    smk = (Path(__file__).parent.parent / "workflow" / "rules" / "blast.smk").read_text()
+    assert "-max_target_seqs" in smk
+    assert "blast_max_target_seqs" in smk
+
+
+def test_config_template_uses_permissive_blast_seeding():
+    """word_size 7 silently hides mismatched short oligos (a 13-mer probe with
+    one mismatch is unseedable 7.7% of the time); word_size 4 does not. Pin the
+    shipped default so a future 'optimisation' cannot reintroduce the blind spot
+    without failing a test."""
+    import yaml
+    cfg = yaml.safe_load(
+        (Path(__file__).parent.parent / "config" / "config.yaml").read_text()
+    )
+    assert cfg["blast_word_size"] == 4
+    assert cfg["blast_max_target_seqs"] >= 50000
+
+
+def test_word_size_4_seeds_every_realistic_mismatch_placement():
+    """The property that motivates word_size 4: a hit needs one exact run of at
+    least word_size. Verify no placement of up to 2 mismatches in a 13-nt or
+    longer oligo can break every run below 4 — and that word_size 7 does not
+    have that property."""
+    from itertools import combinations
+
+    def worst_case_longest_run(oligo_len, n_mismatch):
+        best = oligo_len
+        for pos in combinations(range(oligo_len), n_mismatch):
+            runs, prev = [], -1
+            for p_ in list(pos) + [oligo_len]:
+                runs.append(p_ - prev - 1)
+                prev = p_
+            best = min(best, max(runs))
+        return best
+
+    for oligo_len in (13, 17, 20, 25):
+        for n_mismatch in (1, 2):
+            assert worst_case_longest_run(oligo_len, n_mismatch) >= 4
+    # the blind spot word_size 7 leaves, made explicit
+    assert worst_case_longest_run(13, 1) < 7
+    assert worst_case_longest_run(17, 2) < 7

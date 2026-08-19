@@ -9,7 +9,7 @@ It is for demonstration and testing only, **not** the full manuscript dataset.
 
 ## Run it
 
-From this directory (with the `primeval` conda environment active):
+From this directory (with the `assayval` conda environment active):
 
 ```bash
 bash run_example.sh

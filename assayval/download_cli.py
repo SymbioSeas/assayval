@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# <repo>/primeval/download_cli.py -> <repo>/scripts/download/download_assemblies.sh
+# <repo>/assayval/download_cli.py -> <repo>/scripts/download/download_assemblies.sh
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "download" / "download_assemblies.sh"
 
 

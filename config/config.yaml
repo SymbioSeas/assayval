@@ -37,6 +37,9 @@ max_amplicon_size: 500         # bp; well above typical qPCR/ddPCR amplicons (~7
 # ── Output options ─────────────────────────────────────────────────────────────
 store_amplicon_sequences: false  # true = store per-amplicon FASTA sequence in outputs
 keep_blast: false                # true = retain raw BLAST TSVs (large); false = delete after use
+                                 #   Set true if you intend to re-score this run at other
+                                 #   detection thresholds later (assay-val --rescore-from),
+                                 #   e.g. for a threshold sensitivity analysis. See README.
 keep_logs: false                 # true = retain per-assembly logs/ after a run; false = delete on success
 
 # ── BLAST parameters ───────────────────────────────────────────────────────────
@@ -44,4 +47,21 @@ keep_logs: false                 # true = retain per-assembly logs/ after a run;
 # by the mismatch and coverage filters in the detection engine.
 blast_evalue: 1000
 blast_perc_identity: 70
-blast_word_size: 7             # tuned for short oligo queries (<50 nt)
+# blastn-short defaults word_size to 7. A BLAST hit must contain at least one
+# exact word-length run, so with word_size 7 an oligo whose mismatches break it
+# into runs shorter than 7 nt is never seeded and is silently invisible — no
+# matter how permissive max_primer_mismatches is. That blind spot grows as
+# oligos get shorter: for a 17-mer it hides 7.4% of 2-mismatch placements, and
+# for a 13-mer probe 7.7% of SINGLE-mismatch placements. word_size 4 (the
+# minimum blastn allows, and simulate_PCR's default — Gardner & Slezak 2014,
+# doi:10.1186/1471-2105-15-237) reduces that to zero for every oligo length and
+# mismatch budget used here, at a small cost in search time. Raise it only to
+# trade sensitivity for speed.
+blast_word_size: 4
+# blastn defaults -max_target_seqs to 500. In a per-assembly database the
+# subjects are contigs, and with these permissive settings a short oligo seeds
+# hits on many of them, so a fragmented draft assembly can exceed the cap and
+# lose real binding sites — the cap is applied during the search, not as a
+# post-hoc "keep the best 500" (Shah et al. 2019, doi:10.1093/bioinformatics/bty833).
+# Set far above any plausible contig count so it never binds.
+blast_max_target_seqs: 50000

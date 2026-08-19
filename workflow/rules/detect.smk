@@ -1,6 +1,10 @@
-rule run_ispcr:
+rule run_detection:
     input:
-        blast=config["results_dir"] + "/blast/{accession}.tsv",
+        # BLAST_DIR is this run's own blast/ directory, or a previous run's
+        # retained blast/ when re-scoring (see the Snakefile header).
+        blast=BLAST_DIR + "/{accession}.tsv.gz",
+        # Still required when re-scoring: detect.py re-reads the genome to
+        # reconstruct BLAST end-trimmed hits to full oligo length.
         fna=config["assembly_dir"] + "/{accession}.fna",
         assay_table=config["assay_table"],
     output:
@@ -15,7 +19,7 @@ rule run_ispcr:
         mem_mb=2000,
     shell:
         """
-        python {SCRIPTS}/run_ispcr.py \
+        python {SCRIPTS}/detect.py \
             --blast "{input.blast}" \
             --fna "{input.fna}" \
             --assay-table "{input.assay_table}" \

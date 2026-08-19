@@ -1,4 +1,4 @@
-name: primeval
+name: assayval
 # conda-forge is listed first (bioconda's recommended channel priority), then
 # bioconda. The 'defaults' (anaconda) channel is intentionally omitted: this
 # stack resolves entirely from conda-forge + bioconda, and omitting defaults
@@ -30,7 +30,7 @@ dependencies:
   - numpy
   # ── Testing ─────────────────────────────────────────────────────────────────
   - pytest>=8
-  # pip is used for the editable install of primeval itself, done as a separate
+  # pip is used for the editable install of AssayVal itself, done as a separate
   # step after the environment is created (`pip install -e .`; see the README).
   # It is kept out of this file so the same spec drives the conda-lock file,
   # which cannot express a local editable install.

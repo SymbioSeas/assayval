@@ -2,7 +2,7 @@
 import shutil
 import subprocess
 
-import primeval.download_cli as dc
+import assayval.download_cli as dc
 
 
 def test_wrapper_resolves_to_download_script():

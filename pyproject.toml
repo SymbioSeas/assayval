@@ -3,19 +3,19 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "primeval"
+name = "assayval"
 version = "0.1.0"
 description = "In silico PCR assay validation pipeline"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-primeval = "primeval.cli:main"
+assay-val = "assayval.cli:main"
 assay-design = "assay_design.cli:main"
-download-assemblies = "primeval.download_cli:main"
+download-assemblies = "assayval.download_cli:main"
 
 [tool.setuptools]
-packages = ["primeval", "assay_design"]
+packages = ["assayval", "assay_design"]
 
 [tool.setuptools.package-dir]
 assay_design = "assay-design"

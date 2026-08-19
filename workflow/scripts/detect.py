@@ -1,3 +1,15 @@
+"""AssayVal detection engine.
+
+Consumes one assembly's raw BLAST output (all assay oligos vs. that assembly),
+reconstructs each gapless hit to full oligo length against the genome, applies
+the IUPAC-aware mismatch, 3'-exact and amplicon-size filters, and emits a
+per-assay detection call for that assembly.
+
+Run per assembly by the run_detection Snakemake rule (workflow/rules/detect.smk).
+This module holds no BLAST logic, so it can be re-run over retained BLAST output
+at different thresholds without repeating the search (see `assay-val
+--rescore-from`).
+"""
 import re
 import csv
 import argparse
@@ -6,9 +18,13 @@ from pathlib import Path
 from Bio import SeqIO
 
 
+# Must match the -outfmt column order in workflow/rules/blast.smk exactly.
+# Deliberately minimal: pident, evalue, bitscore, qseq and BLAST's own sseq and
+# mismatch count are all unused here — the subject window is re-extracted from
+# the assembly and the mismatch count recomputed IUPAC-aware — so requesting
+# them only inflates the raw output, which is the dominant disk cost of a run.
 BLAST_COLS = [
-    'qseqid', 'sseqid', 'pident', 'length', 'mismatch', 'gapopen',
-    'qstart', 'qend', 'sstart', 'send', 'evalue', 'bitscore', 'qseq', 'sseq',
+    'qseqid', 'sseqid', 'length', 'gapopen', 'qstart', 'qend', 'sstart', 'send',
 ]
 
 DETECTION_COLS = [
@@ -283,15 +299,23 @@ def extract_amplicon_sequence(contigs: dict[str, str], contig_id: str,
 
 
 def load_blast_results(blast_tsv: str) -> pd.DataFrame:
-    """Load BLAST tabular output; return empty DataFrame if file is absent or has no hits."""
+    """Load BLAST tabular output; return empty DataFrame if absent or has no hits.
+
+    Accepts plain or gzipped tabular output — pandas infers compression from the
+    file extension. An assembly with no hits for any oligo yields an empty file,
+    which gzips to a ~20-byte header rather than 0 bytes, so the empty case is
+    caught by the parse rather than by a size check.
+    """
     p = Path(blast_tsv)
     if not p.exists() or p.stat().st_size == 0:
         return pd.DataFrame(columns=BLAST_COLS)
-    df = pd.read_csv(p, sep='\t', header=None, names=BLAST_COLS)
-    return df
+    try:
+        return pd.read_csv(p, sep='\t', header=None, names=BLAST_COLS)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=BLAST_COLS)
 
 
-def run_ispcr(blast_tsv: str, assay_table: str, fna_path: str,
+def run_detection(blast_tsv: str, assay_table: str, fna_path: str,
               max_primer_mismatches: int, prime3_exact_nt: int,
               max_probe_mismatches: int, max_amplicon_size: int,
               store_amplicon_sequences: bool) -> pd.DataFrame:
@@ -379,7 +403,7 @@ def main():
     p.add_argument('--detection-out', required=True)
     args = p.parse_args()
 
-    det_df = run_ispcr(
+    det_df = run_detection(
         blast_tsv=args.blast, assay_table=args.assay_table, fna_path=args.fna,
         max_primer_mismatches=args.max_primer_mismatches,
         prime3_exact_nt=args.prime3_exact_nt,

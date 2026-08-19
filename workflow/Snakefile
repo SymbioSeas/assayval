@@ -1,25 +1,59 @@
 import shutil
 from pathlib import Path
 
-# Config is supplied on the command line (primeval CLI passes --configfile;
+# Config is supplied on the command line (the assay-val CLI passes --configfile;
 # direct snakemake users pass --configfile config/config.yaml). No hardcoded
 # configfile: directive, so the workflow parses from any working directory.
 
 # Directory containing this Snakefile's scripts, resolved independently of cwd.
 SCRIPTS = Path(workflow.basedir) / "scripts"
 
-# Discover assemblies once at DAG-build time
-ACCESSIONS = glob_wildcards(config["assembly_dir"] + "/{accession}.fna").accession
 RESULTS = config["results_dir"]
 
+# ── Re-score mode ─────────────────────────────────────────────────────────────
+# blast_dir, when set, points at a PREVIOUS run's retained blast/ directory. The
+# oligo-preparation and BLAST rules are then skipped entirely and the pipeline
+# starts from those cached BLAST TSVs, re-applying the detection thresholds and
+# writing a fresh results directory. This is what makes threshold sensitivity
+# analyses affordable: BLAST is the dominant cost of a run and only has to be
+# paid once, while scoring can be repeated cheaply at many threshold settings.
+# The source run must have been run with keep_blast: true. The assemblies are
+# still required — detect.py re-reads each genome to rebuild BLAST end-trimmed
+# hits to full oligo length — so assembly_dir must still resolve.
+# Set with `assay-val --rescore-from <previous-run-dir>`.
+RESCORE_FROM = config.get("blast_dir")
+BLAST_DIR = RESCORE_FROM or (RESULTS + "/blast")
+
+# Discover the work set once at DAG-build time. In re-score mode the work is
+# bounded by the cached BLAST output rather than by whatever is in assembly_dir,
+# so re-scoring a subsampled run does not silently pull in extra assemblies.
+if RESCORE_FROM:
+    ACCESSIONS = glob_wildcards(BLAST_DIR + "/{accession}.tsv.gz").accession
+else:
+    ACCESSIONS = glob_wildcards(config["assembly_dir"] + "/{accession}.fna").accession
+
+def _as_bool(value, default=False):
+    """Coerce a config value to a real bool.
+
+    Booleans arrive as booleans from config.yaml but as strings from Snakemake's
+    --config (which `assay-val --set` uses), where the string "false" is truthy
+    and would silently invert the setting.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 # Raw BLAST TSVs are intermediate. By default they are wrapped in temp() so
-# Snakemake deletes each once run_ispcr consumes it. Set keep_blast: true to
-# retain them.
-KEEP_BLAST = config.get("keep_blast", False)
+# Snakemake deletes each once run_detection consumes it. Set keep_blast: true to
+# retain them — required if you intend to re-score the run later.
+KEEP_BLAST = _as_bool(config.get("keep_blast"), False)
 
 # Per-assembly logs/ are intermediate; deleted on successful completion unless
-# keep_logs: true. The top-level run.log (written by the primeval CLI) is kept.
-KEEP_LOGS = config.get("keep_logs", False)
+# keep_logs: true. The top-level run.log (written by the assay-val CLI) is kept.
+KEEP_LOGS = _as_bool(config.get("keep_logs"), False)
 
 
 def blast_output(path):
@@ -49,9 +83,17 @@ rule all:
         RESULTS + "/reports/run_manifest.txt",
 
 
-include: "rules/prepare.smk"
-include: "rules/blast.smk"
-include: "rules/ispcr.smk"
+# In re-score mode the oligo FASTA, the per-assembly BLAST databases and the
+# BLAST search itself are all already accounted for by the cached TSVs, so those
+# rules are not loaded at all. Omitting them (rather than relying on Snakemake to
+# find the outputs up to date) means a missing or incomplete cache fails fast
+# with "missing input files" naming the accession, instead of quietly triggering
+# a full re-BLAST of the dataset.
+if not RESCORE_FROM:
+    include: "rules/prepare.smk"
+    include: "rules/blast.smk"
+
+include: "rules/detect.smk"
 include: "rules/report.smk"
 
 

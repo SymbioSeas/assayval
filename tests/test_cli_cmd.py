@@ -1,4 +1,4 @@
-from primeval.cli import build_parser, build_snakemake_cmd, filter_terminal_line
+from assayval.cli import build_parser, build_snakemake_cmd, filter_terminal_line
 
 
 def test_parser_defaults():
@@ -59,3 +59,123 @@ def test_filter_suppresses_noise():
     assert filter_terminal_line("Building DAG of jobs...", state) == []
     assert filter_terminal_line("Select jobs to execute...", state) == []
     assert filter_terminal_line("Finished job 42.", state) == []
+
+
+# --- re-score mode / config overrides ------------------------------------------
+
+from pathlib import Path
+
+import pytest
+
+from assayval.cli import parse_overrides, resolve_rescore_blast_dir
+
+
+def test_parser_rescore_defaults():
+    args = build_parser().parse_args([])
+    assert args.rescore_from is None
+    assert args.overrides == []
+
+
+def test_parser_collects_repeated_set_flags():
+    args = build_parser().parse_args(
+        ["--set", "max_primer_mismatches=1", "--set", "prime3_exact_nt=2"]
+    )
+    assert args.overrides == ["max_primer_mismatches=1", "prime3_exact_nt=2"]
+
+
+def test_parse_overrides_passes_valid_tokens_through():
+    tokens = ["max_primer_mismatches=1", "keep_blast=true"]
+    assert parse_overrides(tokens) == tokens
+
+
+@pytest.mark.parametrize("bad", ["max_primer_mismatches", "=2", ""])
+def test_parse_overrides_rejects_malformed(bad):
+    with pytest.raises(ValueError):
+        parse_overrides([bad])
+
+
+def test_build_cmd_overrides_share_the_single_config_flag():
+    """A second --config would replace the first (nargs='+'), silently dropping
+    results_dir, so overrides must be appended to the same flag."""
+    cmd = build_snakemake_cmd(
+        snakefile="s", workdir="w", configfile="c",
+        results_dir_rel="results/x", cores=4,
+        config_overrides=["blast_dir=results/prev/blast", "max_primer_mismatches=1"],
+    )
+    assert cmd.count("--config") == 1
+    i = cmd.index("--config")
+    assert cmd[i + 1:i + 4] == [
+        "results_dir=results/x",
+        "blast_dir=results/prev/blast",
+        "max_primer_mismatches=1",
+    ]
+    # the override block must end before the next flag
+    assert cmd[i + 4] == "--cores"
+
+
+def _cache(tmp_path, name="prev_2026-08-19", n=2):
+    blast = tmp_path / "results" / name / "blast"
+    blast.mkdir(parents=True)
+    for i in range(n):
+        (blast / f"GCF_{i}.tsv.gz").write_bytes(b"")
+    return blast
+
+
+def test_resolve_rescore_accepts_run_directory(tmp_path):
+    _cache(tmp_path)
+    rel, n = resolve_rescore_blast_dir(tmp_path, "results/prev_2026-08-19")
+    assert rel == "results/prev_2026-08-19/blast"
+    assert n == 2
+
+
+def test_resolve_rescore_accepts_blast_directory_directly(tmp_path):
+    _cache(tmp_path)
+    rel, n = resolve_rescore_blast_dir(tmp_path, "results/prev_2026-08-19/blast")
+    assert rel == "results/prev_2026-08-19/blast"
+    assert n == 2
+
+
+def test_resolve_rescore_cache_outside_workdir_stays_absolute(tmp_path):
+    other = tmp_path / "elsewhere"
+    blast = other / "run" / "blast"
+    blast.mkdir(parents=True)
+    (blast / "GCF_0.tsv.gz").write_bytes(b"")
+    wd = tmp_path / "analysis"
+    wd.mkdir()
+    rel, n = resolve_rescore_blast_dir(wd, str(blast))
+    assert Path(rel).is_absolute()
+    assert n == 1
+
+
+def test_resolve_rescore_rejects_missing_path(tmp_path):
+    with pytest.raises(ValueError, match="does not exist"):
+        resolve_rescore_blast_dir(tmp_path, "results/nope")
+
+
+def test_resolve_rescore_rejects_run_without_blast_dir(tmp_path):
+    (tmp_path / "results" / "prev").mkdir(parents=True)
+    with pytest.raises(ValueError, match="keep_blast: true"):
+        resolve_rescore_blast_dir(tmp_path, "results/prev")
+
+
+def test_resolve_rescore_rejects_empty_cache(tmp_path):
+    (tmp_path / "results" / "prev" / "blast").mkdir(parents=True)
+    with pytest.raises(ValueError, match="no cached BLAST output"):
+        resolve_rescore_blast_dir(tmp_path, "results/prev")
+
+
+def test_version_string_reports_package_and_commit():
+    """Run provenance depends on this: a release number alone does not identify
+    a working tree, so a git checkout should also surface its commit."""
+    from assayval.cli import version_string
+    v = version_string()
+    assert isinstance(v, str) and v
+    assert not v.startswith("(")
+
+
+def test_parser_exposes_version_flag(capsys):
+    import pytest as _pytest
+    with _pytest.raises(SystemExit) as e:
+        build_parser().parse_args(["--version"])
+    assert e.value.code == 0
+    assert "assay-val" in capsys.readouterr().out

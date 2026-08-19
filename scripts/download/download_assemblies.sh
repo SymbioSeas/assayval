@@ -2,7 +2,7 @@
 # download_assemblies.sh
 #
 # Download RefSeq genome assemblies for a given taxon from NCBI and build a
-# metadata CSV suitable for primeval.
+# metadata CSV suitable for AssayVal.
 #
 # Requirements:
 #   - NCBI datasets CLI  (conda install -c conda-forge ncbi-datasets-cli)
@@ -37,7 +37,7 @@
 #
 # Output:
 #   OUTDIR/*.fna          — one FASTA file per assembly (multi-replicon genomes concatenated)
-#   OUTDIR/metadata.csv   — assembly metadata for primeval's metadata config key
+#   OUTDIR/metadata.csv   — assembly metadata for AssayVal's metadata config key
 #
 set -euo pipefail
 
@@ -51,11 +51,11 @@ SEED=0
 
 # ── Credentials ("set once") ────────────────────────────────────────────────────
 # Load an optional credentials file so an NCBI API key is applied on every run.
-# Override its location with the PRIMEVAL_CREDENTIALS environment variable.
+# Override its location with the ASSAYVAL_CREDENTIALS environment variable.
 # Key precedence: -k flag > NCBI_API_KEY env var > credentials file.
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _REPO_ROOT="$(cd "${_SCRIPT_DIR}/../.." && pwd)"
-CREDENTIALS_FILE="${PRIMEVAL_CREDENTIALS:-${_REPO_ROOT}/config/ncbi_credentials.sh}"
+CREDENTIALS_FILE="${ASSAYVAL_CREDENTIALS:-${_REPO_ROOT}/config/ncbi_credentials.sh}"
 _ENV_API_KEY="${NCBI_API_KEY:-}"
 _ENV_EMAIL="${NCBI_EMAIL:-}"
 if [[ -f "${CREDENTIALS_FILE}" ]]; then
@@ -138,7 +138,7 @@ mkdir -p "${OUTDIR}" "${WORK_TMP}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG}"; }
 
-log "===== primeval assembly download ====="
+log "===== AssayVal assembly download ====="
 log "Taxa         : ${#TAXA[@]} (${TAXA[*]})"
 log "Output dir   : ${OUTDIR}"
 log "Assembly levels: ${LEVELS}"
