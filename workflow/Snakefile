@@ -24,6 +24,20 @@ RESULTS = config["results_dir"]
 RESCORE_FROM = config.get("blast_dir")
 BLAST_DIR = RESCORE_FROM or (RESULTS + "/blast")
 
+# BLAST search parameters are provenance and belong in the run manifest — the
+# word size in particular now carries a methodological argument, so a manifest
+# that omits it is incomplete. Recorded ONLY when this run actually performed
+# the search: a re-scored run inherits BLAST output produced under the source
+# run's parameters, and writing this run's config values into its manifest
+# would misattribute them. The rescored_from line points at the run whose
+# manifest does record them.
+BLAST_PARAMS = "" if RESCORE_FROM else ",".join([
+    f"evalue={config['blast_evalue']}",
+    f"perc_identity={config['blast_perc_identity']}",
+    f"word_size={config['blast_word_size']}",
+    f"max_target_seqs={config.get('blast_max_target_seqs', 50000)}",
+])
+
 # Discover the work set once at DAG-build time. In re-score mode the work is
 # bounded by the cached BLAST output rather than by whatever is in assembly_dir,
 # so re-scoring a subsampled run does not silently pull in extra assemblies.

@@ -664,3 +664,43 @@ def test_summarize_main_ani_auto_manifest_tier_counts(tmp_path):
     assert "ani_high_confidence: 1" in manifest
     assert "ani_genus_only: 1" in manifest
     assert "ani_low_confidence: 1" in manifest
+
+
+# --- BLAST search provenance in the manifest ---
+
+def _blast_params_from_args(blast_params: str) -> dict:
+    """Mirror of the parsing in summarize.main(), kept in one place for testing."""
+    out = {}
+    for kv in filter(None, (s.strip() for s in blast_params.split(','))):
+        key, _, value = kv.partition('=')
+        out[f'blast_{key}'] = value
+    return out
+
+
+def test_blast_params_parse_into_manifest_keys():
+    """word_size and max_target_seqs now carry a methodological argument, so a
+    manifest that omits them is incomplete provenance."""
+    got = _blast_params_from_args(
+        "evalue=1000,perc_identity=70,word_size=4,max_target_seqs=50000")
+    assert got == {'blast_evalue': '1000', 'blast_perc_identity': '70',
+                   'blast_word_size': '4', 'blast_max_target_seqs': '50000'}
+
+
+def test_blast_params_empty_on_a_rescored_run():
+    """A re-scored run inherits BLAST output produced under the SOURCE run's
+    parameters. Writing this run's config values into its manifest would
+    misattribute them, so the field is empty and rescored_from points at the
+    manifest that does record them."""
+    assert _blast_params_from_args("") == {}
+    assert _blast_params_from_args("   ") == {}
+
+
+def test_manifest_renders_blast_params(tmp_path):
+    assay_table_path = tmp_path / "assays.csv"
+    assay_table_path.write_text("assay,fwd,rev,probe\nA,AAA,TTT,GGG\n")
+    params = {'max_primer_mismatches': 2}
+    params.update(_blast_params_from_args("word_size=4,max_target_seqs=50000"))
+    write_run_manifest(str(tmp_path / "m.txt"), params, str(assay_table_path))
+    content = (tmp_path / "m.txt").read_text()
+    assert "blast_word_size: 4" in content
+    assert "blast_max_target_seqs: 50000" in content

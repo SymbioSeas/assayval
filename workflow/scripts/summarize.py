@@ -373,6 +373,10 @@ def main():
                    type=lambda x: x.lower() == 'true', default=True)
     p.add_argument('--keep-blast', type=lambda x: x.lower() == 'true', default=False)
     p.add_argument('--keep-logs', type=lambda x: x.lower() == 'true', default=False)
+    p.add_argument('--blast-params', default='',
+                   help="Comma-separated key=value BLAST search parameters, recorded "
+                        "in run_manifest.txt. Empty on a re-scored run, which inherits "
+                        "its BLAST output from the run named by --rescored-from.")
     p.add_argument('--rescored-from', default='',
                    help="Path of the run whose cached BLAST output this run re-scored "
                         "(empty on a normal run); recorded in run_manifest.txt.")
@@ -440,6 +444,12 @@ def main():
         'keep_blast': args.keep_blast,
         'keep_logs': args.keep_logs,
     }
+    # BLAST search provenance. Present only on a run that performed the search;
+    # a re-scored run records rescored_from instead, pointing at the manifest
+    # that does hold them.
+    for kv in filter(None, (s.strip() for s in args.blast_params.split(','))):
+        key, _, value = kv.partition('=')
+        params[f'blast_{key}'] = value
     # Provenance for re-scored runs: which run's cached BLAST output this one
     # was derived from. Omitted entirely on a normal run so manifests from
     # ordinary runs are unchanged.

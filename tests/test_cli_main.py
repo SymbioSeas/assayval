@@ -144,3 +144,19 @@ def test_main_rejects_malformed_set(tmp_path, capsys):
     rc = cli.main(["--directory", str(wd), "--set", "nonsense"], runner=lambda c, l: 0)
     assert rc == 2
     assert "KEY=VALUE" in capsys.readouterr().err
+
+
+def test_main_header_reports_the_overridden_assembly_dir(tmp_path, capsys):
+    """The calibration pilot runs with --set assembly_dir=<subset>; the header
+    must count that directory, not the one named in the config file."""
+    wd = _make_workdir(tmp_path)
+    (wd / "assemblies" / "a.fna").write_text(">x\nACGT\n")
+    (wd / "assemblies" / "b.fna").write_text(">x\nACGT\n")
+    (wd / "subset").mkdir()
+    (wd / "subset" / "a.fna").write_text(">x\nACGT\n")
+
+    rc = cli.main(["--run-name", "pilot", "--directory", str(wd),
+                   "--set", "assembly_dir=subset"], runner=lambda c, l: 0)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "subset/  (1 assemblies)" in out

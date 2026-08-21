@@ -179,3 +179,29 @@ def test_parser_exposes_version_flag(capsys):
         build_parser().parse_args(["--version"])
     assert e.value.code == 0
     assert "assay-val" in capsys.readouterr().out
+
+
+# --- --set overrides reflected in the run header --------------------------------
+
+def test_override_value_last_flag_wins():
+    """Snakemake resolves repeated --config keys with the last value, so the CLI
+    must report the same one or the header contradicts the run."""
+    from assayval.cli import override_value
+    ov = ["assembly_dir=first", "max_primer_mismatches=1", "assembly_dir=second"]
+    assert override_value(ov, "assembly_dir") == "second"
+    assert override_value(ov, "max_primer_mismatches") == "1"
+    assert override_value(ov, "absent") is None
+
+
+def test_count_assemblies_honours_assembly_dir_override(tmp_path):
+    from assayval.cli import _count_assemblies
+    (tmp_path / "assemblies").mkdir()
+    for i in range(7):
+        (tmp_path / "assemblies" / f"a{i}.fna").write_text(">x\nACGT\n")
+    (tmp_path / "subset").mkdir()
+    for i in range(2):
+        (tmp_path / "subset" / f"a{i}.fna").write_text(">x\nACGT\n")
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("assembly_dir: assemblies\n")
+    assert _count_assemblies(cfg, tmp_path) == 7
+    assert _count_assemblies(cfg, tmp_path, "subset") == 2

@@ -30,6 +30,8 @@ rule aggregate_report:
         # Recorded in run_manifest.txt so a re-scored run states which run's
         # BLAST output it was derived from. Empty on a normal run.
         rescored_from=RESCORE_FROM or "",
+        # BLAST search provenance; empty on a re-scored run (see the Snakefile).
+        blast_params=BLAST_PARAMS,
     resources:
         mem_mb=16000,
     shell:
@@ -47,5 +49,6 @@ rule aggregate_report:
             --store-amplicon-sequences {params.store_amplicon_sequences} \
             --keep-blast {params.keep_blast} \
             --keep-logs {params.keep_logs} \
-            --rescored-from "{params.rescored_from}"
+            --rescored-from "{params.rescored_from}" \
+            --blast-params "{params.blast_params}"
         """

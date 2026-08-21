@@ -105,6 +105,20 @@ def parse_overrides(overrides):
     return list(overrides)
 
 
+def override_value(overrides, key):
+    """Return the effective --set value for `key`, or None.
+
+    Later flags win, matching how Snakemake resolves repeated --config keys, so
+    the CLI reports the value the workflow will actually use.
+    """
+    value = None
+    for token in overrides:
+        k, sep, v = token.partition("=")
+        if sep and k.strip() == key:
+            value = v
+    return value
+
+
 def resolve_rescore_blast_dir(workdir, rescore_from):
     """Resolve --rescore-from to (blast_dir_for_config, n_cached_tsv).
 
@@ -168,10 +182,16 @@ def _load_config(configfile) -> dict:
         return {}
 
 
-def _count_assemblies(configfile, workdir):
+def _count_assemblies(configfile, workdir, assembly_dir=None):
+    """Count input assemblies, honouring a --set assembly_dir override.
+
+    Without this the header reports whatever the config file says while the run
+    uses the override — which is exactly the kind of quiet mismatch a run log is
+    supposed to prevent.
+    """
     try:
         cfg = _load_config(configfile)
-        adir = Path(workdir) / cfg.get("assembly_dir", "assemblies")
+        adir = Path(workdir) / (assembly_dir or cfg.get("assembly_dir", "assemblies"))
         return len(list(adir.glob("*.fna")))
     except Exception:
         return None
@@ -202,7 +222,8 @@ def _tee_run(cmd, logf):
     return proc.returncode
 
 
-def _print_header(run_name, rel_results, n_assemblies, rescore=None, overrides=None):
+def _print_header(run_name, rel_results, n_assemblies, rescore=None,
+                  overrides=None, assembly_dir=None):
     print(f"assay-val  |  run: {Path(rel_results).name}")
     if rescore:
         blast_dir, n_cached = rescore
@@ -210,7 +231,7 @@ def _print_header(run_name, rel_results, n_assemblies, rescore=None, overrides=N
         print(f"  input   : {blast_dir}  ({n_cached} cached BLAST files)")
     else:
         n = "unknown" if n_assemblies is None else str(n_assemblies)
-        print(f"  input   : assemblies/  ({n} assemblies)")
+        print(f"  input   : {assembly_dir or 'assemblies'}/  ({n} assemblies)")
     if overrides:
         print(f"  config  : {' '.join(overrides)}")
     print(f"  results : {rel_results}/")
@@ -237,10 +258,11 @@ def main(argv=None, runner=None):
         return 2
 
     try:
-        overrides = parse_overrides(args.overrides)
+        user_overrides = parse_overrides(args.overrides)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    overrides = list(user_overrides)
 
     rescore = None
     if args.rescore_from:
@@ -274,8 +296,11 @@ def main(argv=None, runner=None):
         run_dir.mkdir(parents=True, exist_ok=True)
         logf = run_dir / "run.log"
 
-    _print_header(args.run_name, rel_results, _count_assemblies(configfile, workdir),
-                  rescore=rescore, overrides=parse_overrides(args.overrides))
+    assembly_dir = override_value(user_overrides, "assembly_dir")
+    _print_header(args.run_name, rel_results,
+                  _count_assemblies(configfile, workdir, assembly_dir),
+                  rescore=rescore, overrides=user_overrides,
+                  assembly_dir=assembly_dir)
     if not dry:
         print(f"Running AssayVal (full log: {rel_results}/run.log) ...")
 
