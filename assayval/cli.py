@@ -12,6 +12,14 @@ from .rundir import resolve_run_dir
 WORKFLOW = Path(__file__).resolve().parent.parent / "workflow" / "Snakefile"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Starter files `assay-val init` drops into an analysis directory, as
+# (destination name, source in the repo). config.yaml is copied straight from
+# the repo default so a new project always starts from the current defaults.
+INIT_TEMPLATES = [
+    ("config.yaml", REPO_ROOT / "config" / "config.yaml"),
+    ("assay_table.csv", REPO_ROOT / "config" / "assay_table_template.csv"),
+]
+
 
 def version_string() -> str:
     """Package version, plus the git commit when running from a checkout.
@@ -61,6 +69,9 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="assay-val",
         description="Run the AssayVal in silico PCR pipeline on a set of assemblies.",
+        epilog="To start a new analysis, run `assay-val init` in an empty directory to "
+               "drop in a starter config.yaml and assay_table.csv "
+               "(see `assay-val init --help`).",
     )
     p.add_argument("--version", action="version",
                    version=f"assay-val {version_string()}",
@@ -90,6 +101,57 @@ def build_parser():
     p.add_argument("snakemake_args", nargs=argparse.REMAINDER,
                    help="Arguments after -- are passed through to Snakemake.")
     return p
+
+
+def build_init_parser():
+    p = argparse.ArgumentParser(
+        prog="assay-val init",
+        description="Copy the starter config.yaml and assay_table.csv into an analysis "
+                    "directory. Edit both for your project, then run `assay-val` from "
+                    "that directory.",
+    )
+    p.add_argument("--directory", default=".",
+                   help="Analysis directory to set up; created if missing "
+                        "(default: current directory).")
+    p.add_argument("--force", action="store_true",
+                   help="Overwrite existing config.yaml / assay_table.csv.")
+    return p
+
+
+def init_main(argv=None):
+    """Drop the starter templates into an analysis directory.
+
+    Existing files are never overwritten without --force: they may already hold
+    a project's edited thresholds or assays. Missing files are still written,
+    and the exit code is 1 if anything was skipped so scripts notice.
+    """
+    args = build_init_parser().parse_args(argv)
+    workdir = Path(args.directory).resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    print(f"assay-val init  |  {workdir}")
+    skipped = []
+    for name, src in INIT_TEMPLATES:
+        dest = workdir / name
+        if dest.exists() and not args.force:
+            skipped.append(name)
+            print(f"  skipped : {name}  (already exists)")
+            continue
+        verb = "replaced" if dest.exists() else "wrote"
+        dest.write_bytes(src.read_bytes())
+        print(f"  {verb:<8}: {name}")
+
+    if skipped:
+        print(f"\nerror: left {len(skipped)} existing file(s) untouched; "
+              f"re-run with --force to overwrite", file=sys.stderr)
+        return 1
+
+    print("\nNext steps:")
+    print("  1. Edit assay_table.csv: replace the example rows with your assays.")
+    print("  2. Edit config.yaml: check assembly_dir, metadata, thresholds, group_by.")
+    print("  3. Get assemblies, e.g.:  download-assemblies -t \"<taxon>\" -o assemblies/")
+    print("  4. Run from this directory:  assay-val --run-name <name>")
+    return 0
 
 
 def parse_overrides(overrides):
@@ -248,13 +310,19 @@ def _print_footer(rel_results, elapsed):
 
 
 def main(argv=None, runner=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    # `init` is dispatched ahead of the run parser so the long-standing flat run
+    # interface (assay-val --run-name ...) is unchanged.
+    if argv and argv[0] == "init":
+        return init_main(argv[1:])
+
     args = build_parser().parse_args(argv)
     workdir = Path(args.directory).resolve()
     configfile = Path(args.configfile).resolve() if args.configfile else workdir / "config.yaml"
     if not configfile.exists():
         print(f"error: config file not found: {configfile}", file=sys.stderr)
-        print(f"  copy the template:  cp <assayval-repo>/config/config.yaml "
-              f"{workdir}/config.yaml", file=sys.stderr)
+        print(f"  create starter files here with:  assay-val init --directory {workdir}",
+              file=sys.stderr)
         return 2
 
     try:

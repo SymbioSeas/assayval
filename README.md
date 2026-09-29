@@ -12,7 +12,8 @@
 Both tools share the single conda environment defined in `environment.yaml`.
 
 Once installed (below), each tool has a command on your PATH: **`assay-val`**
-and **`assay-design`**. Run either with `--help`.
+and **`assay-design`**. Run either with `--help`. Start a new AssayVal analysis
+with `assay-val init` (see [Quick start](#quick-start)).
 
 ## Features
 
@@ -93,7 +94,33 @@ Note: Keep your data and the repository **inside the WSL filesystem** (e.g. unde
 
 ## Quick start
 
-### 1. Download assemblies
+Each analysis lives in its own **analysis directory**: the folder that holds that
+project's `config.yaml`, `assay_table.csv`, and `assemblies/`, and where results are
+written. All commands below are run from inside it.
+
+### 1. Create an analysis directory
+
+Make a new directory for the project and drop the starter files into it with
+`assay-val init`:
+
+```bash
+mkdir my_analysis && cd my_analysis
+assay-val init
+```
+
+This writes two files you edit for your project in the following steps:
+
+| File | Contents |
+|------|----------|
+| `config.yaml` | The default pipeline configuration (paths, detection thresholds, grouping, output options), identical to [`config/config.yaml`](config/config.yaml). |
+| `assay_table.csv` | An assay table with all supported columns and two example rows (one probe-based, one probe-free) to replace with your assays. |
+
+`assay-val init` never overwrites an existing `config.yaml` or `assay_table.csv`
+(it skips them and exits non-zero); pass `--force` to replace them with fresh
+copies. Use `--directory DIR` to set up a directory other than the current one
+(it is created if missing).
+
+### 2. Download assemblies
 
 Use the `download-assemblies` command to download RefSeq assemblies for your taxon of interest:
 
@@ -103,15 +130,12 @@ download-assemblies -t "Vibrionaceae" -o assemblies/
 
 This downloads all RefSeq assemblies (complete through contig level) for the specified taxon and writes a `metadata.csv` to the output directory. See [Downloading assemblies](#downloading-assemblies) for options and HPC usage.
 
-### 2. Configure the pipeline
+### 3. Configure the pipeline
 
-Copy the config template into your analysis directory (the folder holding your
-`assemblies/`, where results will be written) and edit the copied config to point at your
-assemblies and set detection thresholds:
-
-```bash
-cp /path/to/assayval/config/config.yaml ./config.yaml
-```
+Edit the `config.yaml` created by `assay-val init`. Its defaults already match the
+layout above (`assemblies/`, `assemblies/metadata.csv`, `assay_table.csv`), so
+usually you only review the detection thresholds and grouping. All paths are
+relative to the analysis directory:
 
 ```yaml
 assembly_dir: "assemblies"          # directory containing .fna files
@@ -132,14 +156,16 @@ max_amplicon_size: 500              # maximum amplicon size (bp)
 # group_by: ["species", "phenotype"]
 ```
 
-### 3. Prepare your assay table
+### 4. Prepare your assay table
 
-Create a CSV file named `assay_table.csv` with one row per assay (see [Assay table format](#assay-table-format)).
+Edit the `assay_table.csv` created by `assay-val init`: replace the two example rows
+with your assays, one row per assay (see [Assay table format](#assay-table-format)).
 
-### 4. Run
+### 5. Run
 
 `assay-val` is installed on your PATH (see [Installation](#installation)). Run it
-from any analysis directory containing your `assemblies/` directory and an updated `config.yaml` file:
+from the analysis directory, which now contains your `assemblies/` and the edited
+`config.yaml` and `assay_table.csv`:
 
 ```bash
 assay-val --run-name Vpop
@@ -180,7 +206,9 @@ snakemake --configfile config/config.yaml --profile workflow/profiles/local \
 
 ## Assay table format
 
-The assay table is a CSV file with the following columns:
+The assay table is a CSV file with the following columns. `assay-val init` writes a
+starter `assay_table.csv` with every column below already in place (the template is
+[`config/assay_table_template.csv`](config/assay_table_template.csv)).
 
 | Column  | Required | Description                                                                               |
 | ------- | -------- | ----------------------------------------------------------------------------------------- |
