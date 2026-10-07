@@ -42,3 +42,14 @@ def test_dag_omits_amplicon_export_when_disabled(tmp_path):
     out = _dry_run(_analysis_dir(tmp_path), "amplicon_fasta=false")
     assert "export_amplicon_fasta" not in out
     assert "run_detection" in out
+
+
+def test_dag_rejects_bad_lna_mismatch(tmp_path):
+    wd = _analysis_dir(tmp_path)
+    proc = subprocess.run(
+        ["snakemake", "-n", "--snakefile", str(SNAKEFILE), "--directory", str(wd),
+         "--configfile", str(wd / "config.yaml"), "--cores", "1",
+         "--config", "results_dir=results/t", "group_by=organism_name",
+         "lna_mismatch=sometimes"], capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "lna_mismatch" in proc.stdout + proc.stderr

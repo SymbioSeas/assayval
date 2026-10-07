@@ -17,10 +17,13 @@ import sys
 import warnings
 from pathlib import Path
 
+from oligo import parse_oligo, OligoError
+
 ASSAY_REQUIRED_COLS = ('assay', 'fwd', 'rev', 'probe')
-IUPAC = set('ACGTRYSWKMBDHVN')
-# Same modification syntax prepare_oligos/detect strip: /56-FAM/, /ZEN/, [BHQ1].
-_MOD_RE = re.compile(r'/[^/]+/|\[[^\]]+\]')
+# Optional per-assay overrides of the config-wide detection thresholds. A blank
+# cell (or absent column) means "use the config value".
+THRESHOLD_COLS = ('max_primer_mismatches', 'prime3_exact_nt',
+                  'max_probe_mismatches', 'max_amplicon_size')
 
 # Typographic characters that legitimately appear in free text. Used to judge
 # which legacy codepage decodes a file into plausible text.
@@ -163,18 +166,43 @@ def load_assay_table(path) -> list[dict]:
             raise ValueError(f"{where}: duplicate assay name '{assay}'")
         seen.add(assay)
         for col in ('fwd', 'rev', 'probe'):
-            seq = _MOD_RE.sub('', r[col])
-            if not seq:
-                if col != 'probe':
-                    raise ValueError(f"{where}: assay '{assay}' {col} sequence is empty")
-                continue
-            bad = sorted({c for c in seq.upper() if c not in IUPAC})
-            if bad:
+            try:
+                bases = parse_oligo(r[col]).bases
+            except OligoError as e:
+                raise ValueError(f"{where}: assay '{assay}' {col}: {e}") from None
+            if not bases and col != 'probe':
+                raise ValueError(f"{where}: assay '{assay}' {col} sequence is empty")
+        for col in THRESHOLD_COLS:
+            try:
+                _threshold_value(r.get(col, ''))
+            except ValueError:
                 raise ValueError(
-                    f"{where}: assay '{assay}' {col} sequence {r[col]!r} contains "
-                    f"invalid character(s) {bad}; only IUPAC bases are allowed "
-                    "(write modifications as /Mod/ or [Mod])")
+                    f"{where}: assay '{assay}' {col} must be blank or a "
+                    f"non-negative whole number, got {r[col]!r}") from None
     return rows
+
+
+def _threshold_value(cell: str):
+    """None for a blank cell, else a non-negative int ('2.0' accepted, since
+    Excel may write whole numbers that way); ValueError otherwise."""
+    cell = (cell or '').strip()
+    if not cell:
+        return None
+    value = float(cell)
+    if value < 0 or not value.is_integer():
+        raise ValueError(cell)
+    return int(value)
+
+
+def assay_thresholds(row: dict, defaults: dict) -> dict:
+    """Effective detection thresholds for one assay: its non-blank
+    THRESHOLD_COLS cells override the config-wide `defaults`."""
+    out = dict(defaults)
+    for col in THRESHOLD_COLS:
+        value = _threshold_value(row.get(col, ''))
+        if value is not None:
+            out[col] = value
+    return out
 
 
 def read_metadata(path):

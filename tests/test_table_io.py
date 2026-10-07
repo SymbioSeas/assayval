@@ -109,3 +109,44 @@ def test_read_metadata_mac_roman_semicolon(tmp_path):
         df = read_metadata(p)
     assert list(df.columns) == ["accession", "organism_name"]
     assert df.loc[0, "organism_name"] == "Vibrio caamaño"
+
+
+# --- oligo notation + per-assay thresholds ----------------------------------
+
+def test_load_assay_table_accepts_lna_both_notations(tmp_path):
+    p = _table(tmp_path, "A1,ACGT,TTGA,TG+GAATC+GTTT+GACTGCATTT\n"
+                         "A2,ACGT,TTGA,TG[G]AATC[G]TTT[G]ACTGCATTT\n")
+    assert len(load_assay_table(p)) == 2
+
+
+def test_load_assay_table_rejects_unknown_internal_code(tmp_path):
+    p = _table(tmp_path, "A1,ACGT,TTGA,AC/iMyDye/GT\n")
+    with pytest.raises(ValueError, match=r"'A1' probe.*/iMyDye/"):
+        load_assay_table(p)
+
+
+THRESH_HEADER = "assay,fwd,rev,probe,max_primer_mismatches,prime3_exact_nt,max_probe_mismatches,max_amplicon_size"
+
+
+def test_threshold_columns_optional_and_blank_ok(tmp_path):
+    p = _table(tmp_path, "A1,ACGT,TTGA,,,,0,\n", header=THRESH_HEADER)
+    assert load_assay_table(p)[0]["max_probe_mismatches"] == "0"
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "two"])
+def test_threshold_columns_must_be_non_negative_int(tmp_path, value):
+    p = _table(tmp_path, f"A1,ACGT,TTGA,,{value},,,\n", header=THRESH_HEADER)
+    with pytest.raises(ValueError, match="'A1' max_primer_mismatches.*non-negative whole number"):
+        load_assay_table(p)
+
+
+def test_assay_thresholds_override_and_fallback():
+    from table_io import assay_thresholds
+    defaults = {"max_primer_mismatches": 2, "prime3_exact_nt": 1,
+                "max_probe_mismatches": 1, "max_amplicon_size": 500}
+    row = {"assay": "A", "max_probe_mismatches": "0", "max_amplicon_size": "",
+           "prime3_exact_nt": "2.0"}  # Excel may write whole numbers as 2.0
+    assert assay_thresholds(row, defaults) == {
+        "max_primer_mismatches": 2, "prime3_exact_nt": 2,
+        "max_probe_mismatches": 0, "max_amplicon_size": 500}
+    assert assay_thresholds({"assay": "B"}, defaults) == defaults

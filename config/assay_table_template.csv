@@ -1,3 +1,3 @@
-﻿assay,fwd,rev,probe,target_group,target_gene
-ExampleProbeAssay,AGCCGAGCGTTACCAGC,CGAACGCAATGATTCTCTGAGC,ACGGGACAAAAAGGATGGCGAGTAC,species:Vibrio mediterranei,
-ExampleProbeFreeAssay,GCTACGCCCTCCATCATCC,GCGCGTGATTATCTGATAGC,,,
+﻿assay,fwd,rev,probe,target_group,target_gene,max_primer_mismatches,prime3_exact_nt,max_probe_mismatches,max_amplicon_size
+ExampleProbeAssay,AGCCGAGCGTTACCAGC,CGAACGCAATGATTCTCTGAGC,ACGGGACAAAAAGGATGGCGAGTAC,species:Vibrio mediterranei,,,,,
+ExampleProbeFreeAssay,GCTACGCCCTCCATCATCC,GCGCGTGATTATCTGATAGC,,,,,,,

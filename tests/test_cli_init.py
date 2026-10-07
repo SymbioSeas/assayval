@@ -83,3 +83,11 @@ def test_config_template_is_pure_ascii():
     """An ASCII config survives any editor's re-encoding unchanged."""
     data = (REPO / "config" / "config.yaml").read_bytes()
     assert all(b < 128 for b in data), "non-ASCII byte in config/config.yaml"
+
+
+def test_template_lists_per_assay_threshold_columns(tmp_path):
+    cli.main(["init", "--directory", str(tmp_path)])
+    header = (tmp_path / "assay_table.csv").read_text(encoding="utf-8-sig").splitlines()[0]
+    for col in ("max_primer_mismatches", "prime3_exact_nt",
+                "max_probe_mismatches", "max_amplicon_size"):
+        assert col in header.split(",")

@@ -1,17 +1,14 @@
-import re
 import argparse
 from pathlib import Path
 from datetime import datetime
 
 import table_io
-
-# Handles slash-delimited (/ZEN/, /56-FAM/) and bracket-format ([AmMC6]) IDT tags.
-# Phosphorothioate (*) notation is not stripped — notify if encountered in input.
-_MOD_RE = re.compile(r'/[^/]+/|\[[^\]]+\]')
+from oligo import parse_oligo
 
 
 def strip_idt_modifications(seq: str) -> str:
-    return _MOD_RE.sub('', seq)
+    """The plain bases of an oligo cell (see oligo.parse_oligo for notation)."""
+    return parse_oligo(seq).bases
 
 
 def load_assay_table(csv_path: str) -> list[dict]:
@@ -31,7 +28,8 @@ def write_oligo_fasta(assays: list[dict], fasta_path: str, log_path: str) -> Non
         name = row['assay']
         for role in ('fwd', 'rev', 'probe'):
             original = row[role]
-            cleaned = strip_idt_modifications(original)
+            parsed = parse_oligo(original)
+            cleaned = parsed.bases
             oligo_id = f"{name}_{role}"
             if not cleaned:
                 if role == 'probe':
@@ -43,10 +41,16 @@ def write_oligo_fasta(assays: list[dict], fasta_path: str, log_path: str) -> Non
             cleaned_oligos.append((oligo_id, cleaned))
             if cleaned != original:
                 log_lines.append(
-                    f"{oligo_id}: stripped modification | original: {original} | cleaned: {cleaned}"
+                    f"{oligo_id}: original: {original} | searched: {cleaned}"
                 )
+                for note in parsed.notes:
+                    log_lines.append(f"{oligo_id}:   {note}")
             else:
                 log_lines.append(f"{oligo_id}: no modification")
+            if parsed.lna:
+                log_lines.append(
+                    f"{oligo_id}: LNA at positions "
+                    f"{', '.join(str(i + 1) for i in parsed.lna)} (1-based, 5'->3')")
     Path(fasta_path).write_text('\n'.join(fasta_lines) + '\n')
     # Scan for IUPAC degenerate bases (beyond standard ACGTN)
     degenerate_found = False

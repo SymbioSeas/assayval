@@ -223,10 +223,12 @@ starter `assay_table.csv` with every column below already in place (the template
 | `probe` | Column yes, value no | Probe sequence (5′-3′). The **column must be present**, but leave the value empty to declare a probe-free (SYBR/dsDNA-dye) assay. See [Probe-free assays](#probe-free-assays). |
 | `target_group` | No (column may be omitted) | The metadata group this assay is designed to detect, as `column:value` (e.g. `phenotype:protective`, `species:Vibrio mediterranei`). A bare value (no colon) is matched against the primary `group_by` column. Drives `assay_performance.csv`. |
 | `target_gene` | No (column may be omitted) | Free-text gene/target label. Not used in detection; carried through to `assay_performance.csv` if present. |
+| `max_primer_mismatches`, `prime3_exact_nt`, `max_probe_mismatches`, `max_amplicon_size` | No (columns may be omitted) | Per-assay overrides of the [detection thresholds](#detection-thresholds) in `config.yaml`. Leave a cell blank to use the config value; a whole number overrides it for that assay only. See [Per-assay thresholds](#per-assay-thresholds). |
 
-**Sequence notation:**
-- Standard IUPAC ambiguity codes are supported (R, Y, S, W, K, M, B, D, H, V, N)
-- Modifications can be noted inline using `/ModName/` or `[ModName]` notation; these are stripped before alignment (e.g., `/56-FAM/ACGT[BHQ1]` → `ACGT`)
+**Sequence notation:** sequences are written 5′→3′ in any case, using IUPAC codes
+(A C G T and the ambiguity codes R Y S W K M B D H V N), plus the modification
+notation below. See [Oligo notation](#oligo-notation-lna-and-modifications) for the full
+list.
 
 **Which columns must exist:** the `assay`, `fwd`, `rev`, and `probe` columns must **all be
 present**. The run fails with `Assay table missing required columns` if any is absent. Only
@@ -256,6 +258,65 @@ a one-line warning is printed. To avoid the warning, save as **"CSV UTF-8 (Comma
 delimited)"**. The `assay_table.csv` written by `assay-val init` starts with a UTF-8
 byte-order mark, so Excel opens it as CSV UTF-8 and a plain **Save** keeps that format.
 `metadata.csv` is read the same way.
+
+### Oligo notation (LNA and modifications)
+
+Write each oligo the way you would order it. AssayVal interprets every token, keeps
+the bases a modification carries, removes the ones that carry no base, and stops with
+an error naming any token it does not recognise (rather than guessing, which could
+silently delete or add a base).
+
+| Notation | Example | Searched as |
+|---|---|---|
+| Locked nucleic acid (IDT style) | `TG+GAATC+GTTT+GACTGCATTT` | `TGGAATCGTTTGACTGCATTT`, LNA at positions 3, 8, 12 |
+| Locked nucleic acid (brackets) | `TG[G]AATC[G]TTT[G]ACTGCATTT` (or `[+G]`) | same as above |
+| IDT 5′ / 3′ modification (no base) | `/56-FAM/ACGT/3IABkFQ/` | `ACGT`. `/5…/` must come first and `/3…/` last. |
+| IDT internal quencher / spacer (no base) | `/ZEN/`, `/iTAO/`, `/iSpC3/`, `/iSp9/`, `/iSp18/` | removed |
+| Other non-base modification | `ACGT[BHQ1]`, `[AmMC6]` (two or more characters in brackets) | removed |
+| 5-methyl-dC | `/iMe-dC/` | `C` |
+| Inosine | `/ideoxyI/` or `I` | `N` (scored as matching any base; slightly generous for I·G) |
+| Deoxyuridine / uracil | `/ideoxyU/` or `U` | `T` |
+| Labelled dT | `/iBiodT/`, `/iFluorT/`, `/iAmMC6T/` | `T` |
+| Phosphorothioate bond | `A*C*G*T` | `ACGT` (backbone only) |
+
+`resources/oligos/prep.log` shows, for every oligo, the sequence actually searched,
+each modification removed or converted, and LNA positions. The run manifest lists LNA
+positions per assay.
+
+**How LNA affects detection calls.** An LNA base pairs like the ordinary base, so
+mismatch counting, the 3′-exact rule and the BLAST search are unchanged. But LNA is
+used precisely because it sharpens mismatch discrimination: LNA probes are designed so
+that a mismatch at the LNA site prevents binding. With `lna_mismatch: exact` (the
+default, in `config.yaml`) **a mismatch at any LNA position rejects that primer or probe
+hit**, however many mismatches are otherwise allowed. Set `lna_mismatch: count` to
+score it as an ordinary mismatch instead. This filter runs after BLAST, so both
+settings can be compared on one run with
+`assay-val --rescore-from <run> --set lna_mismatch=count`. AssayVal compares sequences
+only; it does not model the Tm increase LNA provides, and mismatches *adjacent* to an
+LNA (also destabilizing) are counted normally.
+
+**Not supported yet:** RNA bases (`rA`, `[rA]`), 2′-O-methyl RNA (`mA`, `[mA]`) and
+rhAmp/rhPCR primers are rejected with an error, because those primers are only
+extended after cleavage at the RNA base and need their own model. A lowercase `r`/`m`
+is still read as the IUPAC code R/M in an all-lowercase sequence.
+
+> **Excel tip:** a cell that *starts* with `+` (an LNA at the 5′ end, e.g.
+> `+TGGAATC…`) is treated by Excel as a formula and becomes `#NAME?`, both when you
+> type it and each time Excel re-opens the CSV. Write a 5′-terminal LNA in bracket form
+> (`[T]GGAATC…`) instead. AssayVal reports a clear error if it finds `#NAME?` or a
+> formula in a sequence cell.
+
+### Per-assay thresholds
+
+The detection thresholds in `config.yaml` apply to every assay. To change them for
+individual assays, add any of the columns `max_primer_mismatches`, `prime3_exact_nt`,
+`max_probe_mismatches` and `max_amplicon_size` to `assay_table.csv` (`assay-val init`
+includes them, blank). A blank cell uses the config value; a whole number overrides
+it for that assay only. Typical uses are `max_probe_mismatches: 0` for short,
+mismatch-sensitive MGB or LNA probes, and a `max_amplicon_size` that suits each
+assay's expected product. Overrides take precedence over `assay-val --set`, so an
+assay with its own value is not varied by a threshold sweep. Overrides are listed in
+the run manifest and carried into `assay_performance.csv`.
 
 ### Probe-free assays
 
@@ -438,6 +499,10 @@ specificity against threshold, one panel per assay.
 - `--set` accepts any config key, but changing anything that feeds the BLAST
   search itself (`assay_table`, `blast_*`) is meaningless in re-score mode: those
   results are baked into the cache. Change an assay and you need a full run.
+  Per-assay threshold columns and `lna_mismatch` *are* applied at re-score time.
+- BLAST output cached by a version before LNA support searched bracket-LNA
+  (`[G]`), `/ideoxyI/` and `/iMe-dC/` oligos with those bases deleted. Re-run BLAST
+  (a full run) for any assay written that way rather than re-scoring its old cache.
 - Re-scoring is not free — the detection step still runs per assembly — but it
   skips the database build and the search, which is where the time and disk go.
 

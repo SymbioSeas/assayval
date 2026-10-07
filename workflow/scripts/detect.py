@@ -10,13 +10,13 @@ This module holds no BLAST logic, so it can be re-run over retained BLAST output
 at different thresholds without repeating the search (see `assay-val
 --rescore-from`).
 """
-import re
 import argparse
 import pandas as pd
 from pathlib import Path
 from Bio import SeqIO
 
 import table_io
+from oligo import parse_oligo
 
 
 # Must match the -outfmt column order in workflow/rules/blast.smk exactly.
@@ -34,13 +34,6 @@ DETECTION_COLS = [
     'fwd_mismatches', 'rev_mismatches', 'probe_mismatches', 'probe_strand',
     'amplicon_sequences',
 ]
-
-_MOD_RE = re.compile(r'/[^/]+/|\[[^\]]+\]')
-
-
-def _strip(seq: str) -> str:
-    return _MOD_RE.sub('', seq)
-
 
 IUPAC_BASES = {
     'A': {'A'},      'T': {'T'},      'G': {'G'},      'C': {'C'},
@@ -73,6 +66,23 @@ def check_3prime_exact(primer_seq: str, sseq: str, n: int = 3) -> bool:
     if '-' in tail_q or '-' in tail_s:
         return False
     return all(iupac_match(q, s) for q, s in zip(tail_q, tail_s))
+
+
+def lna_positions_match(oligo_seq: str, sseq: str, positions) -> bool:
+    """True if every LNA position of the oligo IUPAC-matches the template.
+
+    LNA strongly increases mismatch discrimination — LNA probes are placed so
+    that a mismatch at the LNA site abolishes binding (e.g. You et al. 2006,
+    Nucleic Acids Res 34:e60) — so under lna_mismatch: exact a mismatch there
+    rejects the hit however permissive the overall mismatch budget is. sseq is
+    oriented to the oligo (see reconstruct_full_hits), so position i of the
+    oligo aligns with sseq[i] on either strand. Contig-edge padding ('-')
+    counts as a mismatch.
+    """
+    for i in positions:
+        if i >= len(sseq) or sseq[i] == '-' or not iupac_match(oligo_seq[i], sseq[i]):
+            return False
+    return True
 
 
 COMPLEMENT = str.maketrans(
@@ -152,7 +162,8 @@ def reconstruct_full_hits(hits: pd.DataFrame, primer_len: int,
 
 def filter_primer_hits(hits: pd.DataFrame, primer_seq: str,
                         max_mismatch: int, prime3_exact: int,
-                        contigs: dict[str, str]) -> pd.DataFrame:
+                        contigs: dict[str, str], lna_positions=(),
+                        lna_mismatch: str = 'exact') -> pd.DataFrame:
     """Return hits passing mismatch and 3'-exact filters over the FULL oligo.
 
     BLAST hits are gapless-filtered, reconstructed to full oligo length from
@@ -189,6 +200,9 @@ def filter_primer_hits(hits: pd.DataFrame, primer_seq: str,
     hits = hits[hits['sseq'].apply(
         lambda s: check_3prime_exact(primer_seq, s, prime3_exact)
     )]
+    if lna_positions and lna_mismatch == 'exact' and not hits.empty:
+        hits = hits[hits['sseq'].apply(
+            lambda s: lna_positions_match(primer_seq, s, lna_positions))]
     return hits
 
 
@@ -240,7 +254,8 @@ def find_valid_amplicons(fwd_hits: pd.DataFrame, rev_hits: pd.DataFrame,
 
 def check_probe_in_amplicons(amplicons: list[dict], probe_hits: pd.DataFrame,
                                probe_seq: str, max_probe_mismatches: int,
-                               contigs: dict[str, str]) -> list[dict]:
+                               contigs: dict[str, str], lna_positions=(),
+                               lna_mismatch: str = 'exact') -> list[dict]:
     """For each amplicon, find a probe hit contained within it (either strand).
 
     Probe hits get the same treatment as primers: gapless filter, full-length
@@ -260,6 +275,9 @@ def check_probe_in_amplicons(amplicons: list[dict], probe_hits: pd.DataFrame,
             lambda s: count_iupac_mismatches(probe_seq, s)
         )
         valid_probe = valid_probe[valid_probe['mismatch'] <= max_probe_mismatches]
+        if lna_positions and lna_mismatch == 'exact' and not valid_probe.empty:
+            valid_probe = valid_probe[valid_probe['sseq'].apply(
+                lambda s: lna_positions_match(probe_seq, s, lna_positions))]
     for amp in amplicons:
         contig_probe = valid_probe[valid_probe['sseqid'] == amp['contig_id']]
         for _, hit in contig_probe.iterrows():
@@ -397,9 +415,20 @@ def run_detection_full(blast_tsv: str, assay_table: str, fna_path: str,
                        max_primer_mismatches: int, prime3_exact_nt: int,
                        max_probe_mismatches: int, max_amplicon_size: int,
                        store_amplicon_sequences: bool,
-                       flank_bp: int = 50) -> tuple[pd.DataFrame, pd.DataFrame]:
+                       flank_bp: int = 50,
+                       lna_mismatch: str = 'exact') -> tuple[pd.DataFrame, pd.DataFrame]:
     """run_detection plus the per-amplicon records (AMPLICON_RECORD_COLS)
-    with `flank_bp` of flanking sequence, for the amplicon FASTA export."""
+    with `flank_bp` of flanking sequence, for the amplicon FASTA export.
+
+    The four threshold arguments are the config-wide values; an assay's own
+    non-blank threshold columns in the assay table override them for that
+    assay (table_io.assay_thresholds)."""
+    defaults = {
+        'max_primer_mismatches': max_primer_mismatches,
+        'prime3_exact_nt': prime3_exact_nt,
+        'max_probe_mismatches': max_probe_mismatches,
+        'max_amplicon_size': max_amplicon_size,
+    }
     blast = load_blast_results(blast_tsv)
     accession = Path(fna_path).stem
     # NB: named contig_seqs (not contigs) — the per-assay loop below rebinds
@@ -413,25 +442,26 @@ def run_detection_full(blast_tsv: str, assay_table: str, fna_path: str,
 
     for row in assays:
         name = row['assay']
-        fwd_seq = _strip(row['fwd'])
-        rev_seq = _strip(row['rev'])
-        probe_seq = _strip(row['probe'])
+        fwd, rev, probe = (parse_oligo(row[c]) for c in ('fwd', 'rev', 'probe'))
+        fwd_seq, rev_seq, probe_seq = fwd.bases, rev.bases, probe.bases
         has_probe = bool(probe_seq)
+        th = table_io.assay_thresholds(row, defaults)
 
         fwd_hits_all = blast[blast['qseqid'] == f'{name}_fwd']
         rev_hits_all = blast[blast['qseqid'] == f'{name}_rev']
         probe_hits_all = blast[blast['qseqid'] == f'{name}_probe']
 
         fwd_hits = filter_primer_hits(fwd_hits_all, fwd_seq,
-                                       max_primer_mismatches, prime3_exact_nt,
-                                       contig_seqs)
+                                       th['max_primer_mismatches'], th['prime3_exact_nt'],
+                                       contig_seqs, fwd.lna, lna_mismatch)
         rev_hits = filter_primer_hits(rev_hits_all, rev_seq,
-                                       max_primer_mismatches, prime3_exact_nt,
-                                       contig_seqs)
+                                       th['max_primer_mismatches'], th['prime3_exact_nt'],
+                                       contig_seqs, rev.lna, lna_mismatch)
 
-        amplicons = find_valid_amplicons(fwd_hits, rev_hits, max_amplicon_size)
+        amplicons = find_valid_amplicons(fwd_hits, rev_hits, th['max_amplicon_size'])
         amplicons = check_probe_in_amplicons(amplicons, probe_hits_all, probe_seq,
-                                             max_probe_mismatches, contig_seqs)
+                                             th['max_probe_mismatches'], contig_seqs,
+                                             probe.lna, lna_mismatch)
 
         if store_amplicon_sequences:
             for amp in amplicons:
@@ -484,6 +514,7 @@ def main():
     p.add_argument('--records-out', default=None,
                    help="Write per-amplicon records (TSV) for the amplicon FASTA export.")
     p.add_argument('--flank-bp', type=int, default=50)
+    p.add_argument('--lna-mismatch', choices=['exact', 'count'], default='exact')
     args = p.parse_args()
 
     det_df, rec_df = run_detection_full(
@@ -494,6 +525,7 @@ def main():
         max_amplicon_size=args.max_amplicon_size,
         store_amplicon_sequences=args.store_amplicon_sequences,
         flank_bp=args.flank_bp,
+        lna_mismatch=args.lna_mismatch,
     )
     det_df.to_csv(args.detection_out, index=False)
     if args.records_out:

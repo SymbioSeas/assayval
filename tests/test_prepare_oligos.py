@@ -101,3 +101,28 @@ def test_load_assay_table_trims_trailing_space_in_primer(tmp_path):
     csv_path = tmp_path / "assay_table.csv"
     csv_path.write_text("assay,fwd,rev,probe\nX,TTTT ,CCCC,\n")
     assert load_assay_table(str(csv_path))[0]['fwd'] == 'TTTT'
+
+
+def test_write_fasta_keeps_lna_bases_both_notations(tmp_path):
+    """Bracket LNA used to be deleted as a 'modification' (21 nt -> 18 nt)."""
+    assays = [
+        {'assay': 'Plus', 'fwd': 'TTTT', 'rev': 'CCCC', 'probe': 'TG+GAATC+GTTT+GACTGCATTT'},
+        {'assay': 'Brkt', 'fwd': 'TTTT', 'rev': 'CCCC', 'probe': 'TG[G]AATC[G]TTT[G]ACTGCATTT'},
+    ]
+    fasta_out, log_out = tmp_path / "o.fasta", tmp_path / "o.log"
+    write_oligo_fasta(assays, str(fasta_out), str(log_out))
+    content = fasta_out.read_text()
+    assert '>Plus_probe\nTGGAATCGTTTGACTGCATTT\n' in content
+    assert '>Brkt_probe\nTGGAATCGTTTGACTGCATTT\n' in content
+    log = log_out.read_text()
+    assert 'Plus_probe: LNA at positions 3, 8, 12' in log
+    assert 'Brkt_probe: LNA at positions 3, 8, 12' in log
+
+
+def test_write_fasta_converts_base_bearing_mods(tmp_path):
+    assays = [{'assay': 'X', 'fwd': 'AC/ideoxyI/GT', 'rev': 'A*C*G*T', 'probe': ''}]
+    fasta_out, log_out = tmp_path / "o.fasta", tmp_path / "o.log"
+    write_oligo_fasta(assays, str(fasta_out), str(log_out))
+    assert '>X_fwd\nACNGT\n' in fasta_out.read_text()
+    assert '>X_rev\nACGT\n' in fasta_out.read_text()
+    assert '/ideoxyI/' in log_out.read_text()

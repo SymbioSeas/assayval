@@ -29,6 +29,7 @@ rule aggregate_report:
         keep_logs=KEEP_LOGS,
         amplicon_fasta=AMPLICON_FASTA,
         amplicon_flank_bp=AMPLICON_FLANK_BP,
+        lna_mismatch=LNA_MISMATCH,
         # Recorded in run_manifest.txt so a re-scored run states which run's
         # BLAST output it was derived from. Empty on a normal run.
         rescored_from=RESCORE_FROM or "",
@@ -53,6 +54,7 @@ rule aggregate_report:
             --keep-logs {params.keep_logs} \
             --amplicon-fasta {params.amplicon_fasta} \
             --amplicon-flank-bp {params.amplicon_flank_bp} \
+            --lna-mismatch {params.lna_mismatch} \
             --rescored-from "{params.rescored_from}" \
             --blast-params "{params.blast_params}"
         """

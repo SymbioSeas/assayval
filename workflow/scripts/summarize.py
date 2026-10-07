@@ -220,7 +220,7 @@ ASSAY_PERF_COLS = [
 # Assay-definition columns carried over from assay_table.csv into
 # assay_performance.csv (each only when present), so the results file is
 # self-contained and needs no cross-referencing back to the assay table.
-ASSAY_CONTEXT_COLS = ['fwd', 'rev', 'probe', 'target_gene']
+ASSAY_CONTEXT_COLS = ['fwd', 'rev', 'probe', 'target_gene', *table_io.THRESHOLD_COLS]
 
 
 def load_assay_targets(assay_table_path: str) -> dict:
@@ -331,6 +331,28 @@ def _tool_version(cmd: list) -> str:
         return 'unknown'
 
 
+def _per_assay_settings(assay_table: str) -> list:
+    """Manifest lines for assays whose own threshold columns override the
+    config, and for every oligo carrying LNA bases (1-based positions)."""
+    from oligo import parse_oligo, OligoError
+    lines = []
+    for r in table_io.read_csv_rows(assay_table):
+        name = r.get('assay', '')
+        overrides = [f"{c}={r[c]}" for c in table_io.THRESHOLD_COLS if (r.get(c) or '').strip()]
+        if overrides:
+            lines.append(f"{name}: {', '.join(overrides)}")
+        for col in ('fwd', 'rev', 'probe'):
+            # Validation is enforced upstream (prepare_oligos/detect); the
+            # manifest only reports, so an unparsable cell is skipped here.
+            try:
+                lna = parse_oligo(r.get(col, '')).lna
+            except OligoError:
+                continue
+            if lna:
+                lines.append(f"{name}: {col} LNA at {', '.join(str(i + 1) for i in lna)}")
+    return lines
+
+
 def write_run_manifest(manifest_path: str, params: dict, assay_table: str, counts: dict | None = None) -> None:
     """Write run manifest with parameters, tool versions, and checksums."""
     lines = [
@@ -349,6 +371,9 @@ def write_run_manifest(manifest_path: str, params: dict, assay_table: str, count
         "## Checksums",
         f"  assay_table.csv  MD5: {_md5(assay_table)}",
     ]
+    per_assay = _per_assay_settings(assay_table)
+    if per_assay:
+        lines += ["", "## Per-assay settings"] + [f"  {l}" for l in per_assay]
     if counts:
         lines += ["", "## Input accounting"]
         for k, v in counts.items():
@@ -373,6 +398,7 @@ def main():
     p.add_argument('--keep-logs', type=lambda x: x.lower() == 'true', default=False)
     p.add_argument('--amplicon-fasta', type=lambda x: x.lower() == 'true', default=True)
     p.add_argument('--amplicon-flank-bp', type=int, default=50)
+    p.add_argument('--lna-mismatch', default='exact')
     p.add_argument('--blast-params', default='',
                    help="Comma-separated key=value BLAST search parameters, recorded "
                         "in run_manifest.txt. Empty on a re-scored run, which inherits "
@@ -445,6 +471,7 @@ def main():
         'keep_logs': args.keep_logs,
         'amplicon_fasta': args.amplicon_fasta,
         'amplicon_flank_bp': args.amplicon_flank_bp,
+        'lna_mismatch': args.lna_mismatch,
     }
     # BLAST search provenance. Present only on a run that performed the search;
     # a re-scored run records rescored_from instead, pointing at the manifest

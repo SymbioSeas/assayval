@@ -716,3 +716,32 @@ def test_assay_table_readers_accept_mac_roman(tmp_path):
     with pytest.warns(UserWarning):
         ctx, cols = load_assay_context(str(p))
     assert ctx["A"]["target_gene"] == "Fernández gene"
+
+
+def test_manifest_lists_per_assay_overrides_and_lna(tmp_path):
+    at = tmp_path / "assay_table.csv"
+    at.write_text("assay,fwd,rev,probe,max_probe_mismatches,max_amplicon_size\n"
+                  "Tommy,ACGT,ACGT,TG+GAATC+GTTT+GACTGCATTT,0,\n"
+                  "Plain,ACGT,ACGT,,,\n")
+    m = tmp_path / "manifest.txt"
+    write_run_manifest(str(m), {'lna_mismatch': 'exact'}, str(at))
+    text = m.read_text()
+    assert "## Per-assay settings" in text
+    assert "Tommy: max_probe_mismatches=0" in text
+    assert "Tommy: probe LNA at 3, 8, 12" in text
+    assert "Plain:" not in text
+
+
+def test_manifest_omits_per_assay_section_when_nothing_to_say(tmp_path):
+    at = tmp_path / "assay_table.csv"
+    at.write_text("assay,fwd,rev,probe\nPlain,ACGT,ACGT,\n")
+    m = tmp_path / "manifest.txt"
+    write_run_manifest(str(m), {}, str(at))
+    assert "Per-assay" not in m.read_text()
+
+
+def test_assay_performance_carries_threshold_columns():
+    from summarize import ASSAY_CONTEXT_COLS
+    for col in ("max_primer_mismatches", "prime3_exact_nt",
+                "max_probe_mismatches", "max_amplicon_size"):
+        assert col in ASSAY_CONTEXT_COLS

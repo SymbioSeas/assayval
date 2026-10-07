@@ -24,6 +24,7 @@ rule run_detection:
         max_amplicon_size=config["max_amplicon_size"],
         store_amplicon_sequences=config["store_amplicon_sequences"],
         flank_bp=AMPLICON_FLANK_BP,
+        lna_mismatch=LNA_MISMATCH,
         records_arg=lambda wildcards, output: (
             f'--records-out "{output.records}"' if AMPLICON_FASTA else ""),
     resources:
@@ -41,5 +42,6 @@ rule run_detection:
             --store-amplicon-sequences {params.store_amplicon_sequences} \
             --detection-out "{output.detection}" \
             --flank-bp {params.flank_bp} \
+            --lna-mismatch {params.lna_mismatch} \
             {params.records_arg}
         """

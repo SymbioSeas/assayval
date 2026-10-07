@@ -82,6 +82,14 @@ AMPLICON_FLANK_BP = int(config.get("amplicon_flank_bp", 50))
 if AMPLICON_FLANK_BP < 0:
     raise ValueError("amplicon_flank_bp must be >= 0")
 
+# How a mismatch at a locked-nucleic-acid (LNA) position is scored: "exact"
+# rejects that primer/probe hit (LNA's purpose is mismatch discrimination),
+# "count" treats it as an ordinary mismatch. Applied after BLAST, so it can be
+# varied with --rescore-from. See workflow/scripts/oligo.py for LNA notation.
+LNA_MISMATCH = str(config.get("lna_mismatch", "exact")).strip().lower()
+if LNA_MISMATCH not in ("exact", "count"):
+    raise ValueError(f"lna_mismatch must be 'exact' or 'count', got {LNA_MISMATCH!r}")
+
 
 # Intentional duplicate of normalize_group_by() in workflow/scripts/summarize.py:
 # Snakemake evaluates this at DAG-build time in a separate process from the summarize

@@ -23,6 +23,13 @@ max_primer_mismatches: 2       # per primer, IUPAC-aware; tolerant of internal S
 prime3_exact_nt: 1             # 3'-terminal bases must match exactly (the terminal base blocks extension)
 max_probe_mismatches: 1        # probe-based assays only; probes tolerate less mismatch than primers
 max_amplicon_size: 500         # bp; well above typical qPCR/ddPCR amplicons (~70-200 bp), rejects spurious long products
+# The four thresholds above can be overridden for individual assays with
+# optional columns of the same names in assay_table.csv (blank = use this value).
+
+# Locked nucleic acids (LNA, written +G or [G] in assay_table.csv) are placed to
+# discriminate mismatches. exact = a mismatch at any LNA position rejects that
+# primer/probe hit; count = score it as an ordinary mismatch.
+lna_mismatch: exact
 
 # -- Grouping -----------------------------------------------------------------
 # group_by: one or more metadata.csv columns used to group assemblies in the
