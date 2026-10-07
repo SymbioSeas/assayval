@@ -11,11 +11,12 @@ at different thresholds without repeating the search (see `assay-val
 --rescore-from`).
 """
 import re
-import csv
 import argparse
 import pandas as pd
 from pathlib import Path
 from Bio import SeqIO
+
+import table_io
 
 
 # Must match the -outfmt column order in workflow/rules/blast.smk exactly.
@@ -221,6 +222,9 @@ def find_valid_amplicons(fwd_hits: pd.DataFrame, rev_hits: pd.DataFrame,
                 continue
             amplicons.append({
                 'contig_id': fwd['sseqid'],
+                # Strand of the fwd primer = orientation of the amplicon read
+                # fwd -> rev; '-' amplicons are reverse-complemented on export.
+                'strand': '+' if fwd_plus else '-',
                 'amplicon_start': amp_start,
                 'amplicon_end': amp_end,
                 'amplicon_size': amp_size,
@@ -298,6 +302,67 @@ def extract_amplicon_sequence(contigs: dict[str, str], contig_id: str,
     return seq[max(start, 1) - 1:end]
 
 
+def extract_flanked_amplicon(contigs: dict[str, str], contig_id: str, start: int,
+                             end: int, strand: str, flank: int) -> tuple[str, int, int]:
+    """Return (sequence, upstream_flank_bp, downstream_flank_bp) for one amplicon.
+
+    The sequence reads from the fwd primer to the rev primer (minus-strand
+    amplicons are reverse-complemented) so every record of an assay aligns
+    directly. Up to `flank` bp of context is added on each side, lowercase,
+    around the uppercase primer-to-primer amplicon; flanks are clipped at
+    contig ends, and the returned lengths are the flanks actually included.
+    "Upstream" means 5' of the fwd primer, which for a minus-strand amplicon is
+    the genomic right-hand side.
+    """
+    seq = contigs.get(contig_id, '')
+    start, end = max(start, 1), min(end, len(seq))
+    left = min(flank, start - 1)
+    right = min(flank, len(seq) - end)
+    window = (seq[start - 1 - left:start - 1].lower()
+              + seq[start - 1:end].upper()
+              + seq[end:end + right].lower())
+    if strand == '-':
+        return revcomp(window), right, left
+    return window, left, right
+
+
+# One row per valid amplicon (Detected and Primer Only alike), written per
+# assembly and gathered by export_amplicons.py into one FASTA per assay.
+AMPLICON_RECORD_COLS = [
+    'accession', 'assay', 'amplicon_index', 'n_amplicons', 'assembly_call',
+    'probe_status', 'contig_id', 'amplicon_start', 'amplicon_end', 'strand',
+    'amplicon_size', 'flank_up_bp', 'flank_down_bp', 'fwd_mismatches',
+    'rev_mismatches', 'probe_mismatches', 'sequence',
+]
+
+
+def build_amplicon_records(accession: str, assay: str, amplicons: list[dict],
+                           call: str, has_probe: bool, contigs: dict[str, str],
+                           flank: int) -> list[dict]:
+    """Per-amplicon records, numbered 1..n in the same order as the detection
+    row's ';'-joined amplicon_starts/contig_ids, so the two cross-reference."""
+    n = len(amplicons)
+    records = []
+    for k, amp in enumerate(amplicons, start=1):
+        seq, up, down = extract_flanked_amplicon(
+            contigs, amp['contig_id'], amp['amplicon_start'], amp['amplicon_end'],
+            amp['strand'], flank)
+        records.append({
+            'accession': accession, 'assay': assay,
+            'amplicon_index': k, 'n_amplicons': n, 'assembly_call': call,
+            # Per copy: in a Detected assembly some copies may lack the probe site.
+            'probe_status': ('yes' if amp['probe_found'] else 'no') if has_probe else 'none',
+            'contig_id': amp['contig_id'],
+            'amplicon_start': amp['amplicon_start'], 'amplicon_end': amp['amplicon_end'],
+            'strand': amp['strand'], 'amplicon_size': amp['amplicon_size'],
+            'flank_up_bp': up, 'flank_down_bp': down,
+            'fwd_mismatches': amp['fwd_mismatches'], 'rev_mismatches': amp['rev_mismatches'],
+            'probe_mismatches': amp['probe_mismatches'],
+            'sequence': seq,
+        })
+    return records
+
+
 def load_blast_results(blast_tsv: str) -> pd.DataFrame:
     """Load BLAST tabular output; return empty DataFrame if absent or has no hits.
 
@@ -323,16 +388,28 @@ def run_detection(blast_tsv: str, assay_table: str, fna_path: str,
     Core detection engine. Returns one detection DataFrame with a single row per
     assay; per-amplicon positions and sequences are ';'-joined into that row.
     """
+    return run_detection_full(
+        blast_tsv, assay_table, fna_path, max_primer_mismatches, prime3_exact_nt,
+        max_probe_mismatches, max_amplicon_size, store_amplicon_sequences)[0]
+
+
+def run_detection_full(blast_tsv: str, assay_table: str, fna_path: str,
+                       max_primer_mismatches: int, prime3_exact_nt: int,
+                       max_probe_mismatches: int, max_amplicon_size: int,
+                       store_amplicon_sequences: bool,
+                       flank_bp: int = 50) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """run_detection plus the per-amplicon records (AMPLICON_RECORD_COLS)
+    with `flank_bp` of flanking sequence, for the amplicon FASTA export."""
     blast = load_blast_results(blast_tsv)
     accession = Path(fna_path).stem
     # NB: named contig_seqs (not contigs) — the per-assay loop below rebinds
     # `contigs` to call_detection's joined contig-id string.
     contig_seqs = load_contigs(fna_path)
 
-    with open(assay_table, encoding='utf-8-sig') as f:
-        assays = list(csv.DictReader(f))
+    assays = table_io.load_assay_table(assay_table)
 
     detection_rows = []
+    amplicon_records = []
 
     for row in assays:
         name = row['assay']
@@ -363,6 +440,8 @@ def run_detection(blast_tsv: str, assay_table: str, fna_path: str,
                 )
 
         call, n, multi, sizes, contigs = call_detection(amplicons, has_probe)
+        amplicon_records += build_amplicon_records(
+            accession, name, amplicons, call, has_probe, contig_seqs, flank_bp)
 
         best_fwd = min((a['fwd_mismatches'] for a in amplicons), default=None)
         best_rev = min((a['rev_mismatches'] for a in amplicons), default=None)
@@ -386,7 +465,8 @@ def run_detection(blast_tsv: str, assay_table: str, fna_path: str,
             'amplicon_sequences': seqs,
         })
 
-    return pd.DataFrame(detection_rows, columns=DETECTION_COLS)
+    return (pd.DataFrame(detection_rows, columns=DETECTION_COLS),
+            pd.DataFrame(amplicon_records, columns=AMPLICON_RECORD_COLS))
 
 
 def main():
@@ -401,17 +481,23 @@ def main():
     p.add_argument('--store-amplicon-sequences',
                    type=lambda x: x.lower() == 'true', default=True)
     p.add_argument('--detection-out', required=True)
+    p.add_argument('--records-out', default=None,
+                   help="Write per-amplicon records (TSV) for the amplicon FASTA export.")
+    p.add_argument('--flank-bp', type=int, default=50)
     args = p.parse_args()
 
-    det_df = run_detection(
+    det_df, rec_df = run_detection_full(
         blast_tsv=args.blast, assay_table=args.assay_table, fna_path=args.fna,
         max_primer_mismatches=args.max_primer_mismatches,
         prime3_exact_nt=args.prime3_exact_nt,
         max_probe_mismatches=args.max_probe_mismatches,
         max_amplicon_size=args.max_amplicon_size,
         store_amplicon_sequences=args.store_amplicon_sequences,
+        flank_bp=args.flank_bp,
     )
     det_df.to_csv(args.detection_out, index=False)
+    if args.records_out:
+        rec_df.to_csv(args.records_out, sep='\t', index=False)
 
 
 if __name__ == '__main__':

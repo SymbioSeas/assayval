@@ -704,3 +704,15 @@ def test_manifest_renders_blast_params(tmp_path):
     content = (tmp_path / "m.txt").read_text()
     assert "blast_word_size: 4" in content
     assert "blast_max_target_seqs: 50000" in content
+
+
+def test_assay_table_readers_accept_mac_roman(tmp_path):
+    from summarize import load_assay_context
+    p = tmp_path / "assay_table.csv"
+    p.write_bytes("assay,fwd,rev,probe,target_group,target_gene\n"
+                  "A,ACGT,TTGA,,genus:Bacillus,Fernández gene\n".encode("mac_roman"))
+    with pytest.warns(UserWarning):
+        assert load_assay_targets(str(p)) == {"A": "genus:Bacillus"}
+    with pytest.warns(UserWarning):
+        ctx, cols = load_assay_context(str(p))
+    assert ctx["A"]["target_gene"] == "Fernández gene"

@@ -23,6 +23,8 @@ with `assay-val init` (see [Quick start](#quick-start)).
 - Handles primer binding on either strand of an assembly
 - Configurable mismatch tolerances and 3′-exact match requirements
 - Outputs per-assay detection summaries, amplicon details, and detection heatmaps
+- Exports one FASTA per assay of every amplicon found (with flanking sequence), ready for probe/primer design in e.g. Geneious
+- Accepts assay tables saved straight from Excel on Mac, Windows or Linux (legacy encodings and `;` delimiters)
 - Runs locally or on SLURM HPC clusters via Snakemake profiles
 
 ## Requirements
@@ -154,6 +156,9 @@ max_amplicon_size: 500              # maximum amplicon size (bp)
 # download-assemblies). See "Metadata format" below.
 # group_by: "species"
 # group_by: ["species", "phenotype"]
+
+amplicon_fasta: true                # one FASTA of all amplicons per assay
+amplicon_flank_bp: 50               # flanking bp each side in those FASTAs
 ```
 
 ### 4. Prepare your assay table
@@ -233,6 +238,24 @@ and may be omitted entirely.
 `reference`, `notes`) to keep your work organized; AssayVal ignores them. The one
 exception is `target_gene` — if you include it, it is carried through to
 `assay_performance.csv` alongside `fwd`, `rev`, and `probe` to make your life easier.
+
+**Checks run before any search:** assay names must be unique and contain no spaces
+(BLAST truncates sequence names at the first space, which would silently orphan the
+assay's hits; use underscores), and after modifications are stripped every `fwd`,
+`rev` and `probe` must contain only IUPAC letters. Leading/trailing spaces in any cell
+are ignored. A failing check stops the run with a message naming the line, assay and
+column.
+
+### Editing the assay table in Excel
+
+Excel's plain **"CSV"** format saves in your platform's legacy encoding (Mac Roman on
+macOS, Windows-1252 on Windows), and in some European locales uses `;` as the
+delimiter. AssayVal reads all of these: a non-UTF-8 file is decoded automatically
+(non-ASCII text such as `14–15`, `60 °C` or accented author names survives intact) and
+a one-line warning is printed. To avoid the warning, save as **"CSV UTF-8 (Comma
+delimited)"**. The `assay_table.csv` written by `assay-val init` starts with a UTF-8
+byte-order mark, so Excel opens it as CSV UTF-8 and a plain **Save** keeps that format.
+`metadata.csv` is read the same way.
 
 ### Probe-free assays
 
@@ -430,6 +453,9 @@ results/<run-name>_<date>/
 │   └── {accession}.csv           # per-assembly, one row per assay: detection call,
 │                                  #   mismatch counts, amplicon sizes/contigs/positions,
 │                                  #   and (if enabled) amplicon sequences
+├── amplicon_fasta/
+│   ├── {assay}_amplicons.fasta   # one per assay: every amplicon (+ flanks) — see below
+│   └── amplicon_index.csv        # one row per FASTA record
 ├── run.log                       # full run log
 └── reports/
     ├── {column}_detection_matrix.csv   # one per group_by column: group × assay % detected
@@ -467,6 +493,37 @@ results/<run-name>_<date>/
 - Raw BLAST output and the per-assembly `logs/` directory are intermediate and are
   deleted once a run completes successfully. Set `keep_blast: true` / `keep_logs: true`
   in `config.yaml` to retain them; the top-level `run.log` is always kept.
+
+### Amplicon FASTA files
+
+`amplicon_fasta/` holds one `{assay}_amplicons.fasta` per assay containing **every
+valid amplicon** that assay produced — `Detected` and `Primer Only` alike — ready to
+import into Geneious or an aligner, e.g. to design a probe for a probe-free assay, or to
+see which primer/probe positions vary in off-target taxa. Every assay gets a file; an
+assay with no amplicons gets an empty one.
+
+- **Orientation:** every record reads from the forward primer to the reverse primer
+  (amplicons on the minus strand are reverse-complemented), so records align directly.
+- **Case:** the primer-to-primer amplicon is UPPERCASE; `amplicon_flank_bp` (default 50)
+  of flanking sequence on each side is lowercase. Flanks are clipped at contig ends.
+  Primer and probe sites are the genome's own sequence, so mismatches are visible.
+  (Some aligners, e.g. MAFFT, lowercase everything unless told to preserve case.)
+- **Names:** `{accession}_amp{k}of{n}_{organism}`, e.g.
+  `GCF_000295695.2_amp3of10_Bacillus_anthracis_str._BF1`. Every amplicon is numbered,
+  so assemblies with several copies (e.g. 16S rRNA) stay unique, and `k` follows the
+  order of `amplicon_starts` / `contig_ids` in `amplicons/{accession}.csv`. Geneious
+  uses this as the sequence name, so alignment rows show taxa; the accession and
+  organism remain searchable. The organism is `organism_name` from `metadata.csv`
+  (falling back to the first `group_by` column, then `unknown`).
+- **Description:** the rest of the header line, e.g.
+  `organism="Bacillus anthracis str. BF1" assay=Bac_16S_Food assembly_call=Detected
+  probe=yes contig=NZ_CP047131.1:82367-82426(+) amplicon_bp=60 flank_bp=50,50 fwd_mm=0
+  rev_mm=0 probe_mm=0`. `probe` is per copy (`yes`/`no`; `none` for probe-free
+  assays): in a `Detected` assembly, some copies may still lack the probe site.
+- `amplicon_index.csv` lists every record (its FASTA name, file and all header fields)
+  in one table.
+
+Set `amplicon_fasta: false` in `config.yaml` to skip the export.
 
 ---
 

@@ -884,3 +884,31 @@ def test_word_size_4_seeds_every_realistic_mismatch_placement():
     # the blind spot word_size 7 leaves, made explicit
     assert worst_case_longest_run(13, 1) < 7
     assert worst_case_longest_run(17, 2) < 7
+
+
+def test_run_detection_excel_table_mac_roman_and_trailing_space(tmp_path):
+    """An Excel-for-Mac table (Mac Roman, CRLF) with a trailing space after a
+    primer must still detect: the space used to be counted as a primer base and
+    fail the 3'-exact check, silently producing Not Detected."""
+    from detect import run_detection
+
+    fwd_seq = "AGCCGAGCGTTACCAGC"
+    rev_seq = "CGAACGCAATGATTCTCTGAGC"
+    assay_csv = tmp_path / "assay_table.csv"
+    assay_csv.write_bytes(
+        ("assay,probe,fwd,rev,notes\r\n"
+         f"VhPath,,{fwd_seq} ,{rev_seq},60 °C – Fernández\r\n")
+        .encode("mac_roman"))
+    seq = "T" * 99 + fwd_seq + "T" * 162 + revcomp(rev_seq) + "T" * 100
+    fna_path = tmp_path / "GCF_000001.fna"
+    fna_path.write_text(f">contig1\n{seq}\n")
+    blast_tsv = tmp_path / "blast.tsv"
+    blast_tsv.write_text(
+        "\t".join(["VhPath_fwd", "contig1", "17", "0", "1", "17", "100", "116"]) + "\n" +
+        "\t".join(["VhPath_rev", "contig1", "22", "0", "1", "22", "300", "279"]) + "\n")
+    with pytest.warns(UserWarning):
+        det_df = run_detection(
+            blast_tsv=str(blast_tsv), assay_table=str(assay_csv), fna_path=str(fna_path),
+            max_primer_mismatches=0, prime3_exact_nt=3, max_probe_mismatches=1,
+            max_amplicon_size=500, store_amplicon_sequences=False)
+    assert det_df.iloc[0]['detection_call'] == 'Detected'

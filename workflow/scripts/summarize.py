@@ -1,4 +1,4 @@
-import csv
+import table_io
 import hashlib
 import subprocess
 import argparse
@@ -225,16 +225,14 @@ ASSAY_CONTEXT_COLS = ['fwd', 'rev', 'probe', 'target_gene']
 
 def load_assay_targets(assay_table_path: str) -> dict:
     """Map assay name -> raw target_group string ('' when column absent or blank)."""
-    with open(assay_table_path, encoding='utf-8-sig') as f:
-        rows = list(csv.DictReader(f))
+    rows = table_io.read_csv_rows(assay_table_path)
     return {r['assay']: (r.get('target_group') or '').strip() for r in rows}
 
 
 def load_assay_context(assay_table_path: str) -> tuple[dict, list]:
     """Return ({assay: {col: value}}, present_cols) for the ASSAY_CONTEXT_COLS
     that exist in the assay table. Absent columns are simply not carried."""
-    with open(assay_table_path, encoding='utf-8-sig') as f:
-        rows = list(csv.DictReader(f))
+    rows = table_io.read_csv_rows(assay_table_path)
     if not rows:
         return {}, []
     present = [c for c in ASSAY_CONTEXT_COLS if c in rows[0]]
@@ -373,6 +371,8 @@ def main():
                    type=lambda x: x.lower() == 'true', default=True)
     p.add_argument('--keep-blast', type=lambda x: x.lower() == 'true', default=False)
     p.add_argument('--keep-logs', type=lambda x: x.lower() == 'true', default=False)
+    p.add_argument('--amplicon-fasta', type=lambda x: x.lower() == 'true', default=True)
+    p.add_argument('--amplicon-flank-bp', type=int, default=50)
     p.add_argument('--blast-params', default='',
                    help="Comma-separated key=value BLAST search parameters, recorded "
                         "in run_manifest.txt. Empty on a re-scored run, which inherits "
@@ -389,7 +389,7 @@ def main():
     figures.mkdir(parents=True, exist_ok=True)
 
     det = load_detection_results(args.amplicons_dir)
-    meta = pd.read_csv(args.metadata, encoding='utf-8-sig')
+    meta = table_io.read_metadata(args.metadata)
     joined = join_metadata(det, meta)
     joined, grouping_cols = compute_grouping(joined, list(args.group_by))
     primary_col = grouping_cols[0]
@@ -443,6 +443,8 @@ def main():
         'store_amplicon_sequences': args.store_amplicon_sequences,
         'keep_blast': args.keep_blast,
         'keep_logs': args.keep_logs,
+        'amplicon_fasta': args.amplicon_fasta,
+        'amplicon_flank_bp': args.amplicon_flank_bp,
     }
     # BLAST search provenance. Present only on a run that performed the search;
     # a re-scored run records rescored_from instead, pointing at the manifest

@@ -1,8 +1,9 @@
 import re
-import csv
 import argparse
 from pathlib import Path
 from datetime import datetime
+
+import table_io
 
 # Handles slash-delimited (/ZEN/, /56-FAM/) and bracket-format ([AmMC6]) IDT tags.
 # Phosphorothioate (*) notation is not stripped — notify if encountered in input.
@@ -14,14 +15,9 @@ def strip_idt_modifications(seq: str) -> str:
 
 
 def load_assay_table(csv_path: str) -> list[dict]:
-    with open(csv_path, encoding='utf-8-sig') as f:
-        rows = list(csv.DictReader(f))
-    if rows:
-        required = {'assay', 'fwd', 'rev', 'probe'}
-        missing = required - set(rows[0].keys())
-        if missing:
-            raise ValueError(f"Assay table missing required columns: {missing} in {csv_path}")
-    return rows
+    # Encoding/delimiter handling and validation live in table_io so every
+    # reader of the assay table agrees on what it contains.
+    return table_io.load_assay_table(csv_path)
 
 
 def write_oligo_fasta(assays: list[dict], fasta_path: str, log_path: str) -> None:

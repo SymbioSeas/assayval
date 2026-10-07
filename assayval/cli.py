@@ -47,6 +47,8 @@ def version_string() -> str:
     return ver
 
 _PROGRESS_RE = re.compile(r'(\d+) of (\d+) steps \(([\d.]+)%\) done')
+# "<path>.py:<line>: SomeWarning: <message>" as printed by Python's warnings module.
+_PYWARN_RE = re.compile(r'^\S+\.py:\d+: \w*Warning: (.*)$')
 _ALERT_RE = re.compile(r'\b(error|exception|traceback|warning|failed)\b', re.IGNORECASE)
 
 
@@ -60,6 +62,16 @@ def filter_terminal_line(line: str, state: dict) -> list:
             state['last_milestone'] = milestone
             return [f"  progress: {done}/{total} steps ({pct:.0f}%)"]
         return []
+    m = _PYWARN_RE.match(line.strip())
+    if m:
+        # Python warnings from the workflow scripts (e.g. an assay table read as
+        # Mac Roman) repeat once per job; show each distinct one once.
+        msg = f"  warning: {m.group(1)}"
+        seen = state.setdefault('seen_warnings', set())
+        if msg in seen:
+            return []
+        seen.add(msg)
+        return [msg]
     if _ALERT_RE.search(line):
         return ["  " + line.rstrip()]
     return []
@@ -239,7 +251,10 @@ def build_snakemake_cmd(*, snakefile, workdir, configfile, results_dir_rel,
 def _load_config(configfile) -> dict:
     try:
         import yaml
-        return yaml.safe_load(Path(configfile).read_text()) or {}
+        # Explicit UTF-8 (not the locale default); undecodable bytes can only be
+        # in comments here, so replace rather than fail the header/run setup.
+        text = Path(configfile).read_text(encoding="utf-8", errors="replace")
+        return yaml.safe_load(text) or {}
     except Exception:
         return {}
 
@@ -300,13 +315,15 @@ def _print_header(run_name, rel_results, n_assemblies, rescore=None,
     print()
 
 
-def _print_footer(rel_results, elapsed):
+def _print_footer(rel_results, elapsed, run_dir=None):
     mins, secs = divmod(int(elapsed), 60)
     print(f"\nDone in {mins}m{secs:02d}s. Results in {rel_results}/")
     print(f"  {rel_results}/reports/assay_performance.csv       (per-assay sensitivity/specificity)")
     print(f"  {rel_results}/reports/detection_summary_long.csv  (per assay x group, all groupings)")
     print(f"  {rel_results}/reports/detection_by_assembly.csv   (per-assembly calls + metadata)")
     print(f"  {rel_results}/reports/figures/                    (one heatmap per grouping column)")
+    if run_dir is not None and (Path(run_dir) / "amplicon_fasta").is_dir():
+        print(f"  {rel_results}/amplicon_fasta/                     (one amplicon FASTA per assay)")
 
 
 def main(argv=None, runner=None):
@@ -386,7 +403,7 @@ def main(argv=None, runner=None):
     elif dry:
         print(f"\nDry run complete (no files written). Real run would write to {rel_results}/")
     else:
-        _print_footer(rel_results, elapsed)
+        _print_footer(rel_results, elapsed, run_dir)
     return rc
 
 

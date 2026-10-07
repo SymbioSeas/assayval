@@ -1,4 +1,4 @@
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# -- Paths ---------------------------------------------------------------------
 # assay_table: CSV defining the assays to evaluate (see README for column spec)
 assay_table: "assay_table.csv"
 
@@ -11,10 +11,10 @@ metadata: "assemblies/metadata.csv"
 # results_dir: all pipeline outputs are written here
 results_dir: "results"
 
-# ── Detection thresholds ───────────────────────────────────────────────────────
+# -- Detection thresholds -------------------------------------------------------
 # Rationale: a primer carrying a single internal (mid-sequence) mismatch still
 # primes efficiently, and even a 3'-penultimate mismatch usually still amplifies
-# (at reduced efficiency) — only a mismatch at the 3'-terminal base reliably
+# (at reduced efficiency) -- only a mismatch at the 3'-terminal base reliably
 # blocks polymerase extension. We therefore tolerate a small number of internal
 # mismatches while requiring the final 3' base to match exactly; raise
 # prime3_exact_nt to 2-3 for stricter extension-critical filtering.
@@ -24,7 +24,7 @@ prime3_exact_nt: 1             # 3'-terminal bases must match exactly (the termi
 max_probe_mismatches: 1        # probe-based assays only; probes tolerate less mismatch than primers
 max_amplicon_size: 500         # bp; well above typical qPCR/ddPCR amplicons (~70-200 bp), rejects spurious long products
 
-# ── Grouping ─────────────────────────────────────────────────────────────────
+# -- Grouping -----------------------------------------------------------------
 # group_by: one or more metadata.csv columns used to group assemblies in the
 # reports. Provide a single column or a YAML list; one detection matrix +
 # heatmap is written per column. Leave unset (commented out) to auto-group by
@@ -34,7 +34,7 @@ max_amplicon_size: 500         # bp; well above typical qPCR/ddPCR amplicons (~7
 #   group_by: "species"
 #   group_by: ["species", "phenotype"]
 
-# ── Output options ─────────────────────────────────────────────────────────────
+# -- Output options -------------------------------------------------------------
 store_amplicon_sequences: false  # true = store per-amplicon FASTA sequence in outputs
 keep_blast: false                # true = retain raw BLAST TSVs (large); false = delete after use
                                  #   Set true if you intend to re-score this run at other
@@ -42,18 +42,25 @@ keep_blast: false                # true = retain raw BLAST TSVs (large); false =
                                  #   e.g. for a threshold sensitivity analysis. See README.
 keep_logs: false                 # true = retain per-assembly logs/ after a run; false = delete on success
 
-# ── BLAST parameters ───────────────────────────────────────────────────────────
+# Amplicon FASTA export: one amplicon_fasta/<assay>_amplicons.fasta per assay with
+# every valid amplicon (Detected and Primer Only), oriented fwd -> rev primer,
+# for probe/primer design in e.g. Geneious. Flanks are lowercase, the
+# primer-to-primer amplicon uppercase; flanks are clipped at contig ends.
+amplicon_fasta: true             # false = skip the export
+amplicon_flank_bp: 50            # bp of flanking sequence each side (0 = amplicon only)
+
+# -- BLAST parameters -----------------------------------------------------------
 # These are intentionally permissive; stringency is enforced downstream
 # by the mismatch and coverage filters in the detection engine.
 blast_evalue: 1000
 blast_perc_identity: 70
 # blastn-short defaults word_size to 7. A BLAST hit must contain at least one
 # exact word-length run, so with word_size 7 an oligo whose mismatches break it
-# into runs shorter than 7 nt is never seeded and is silently invisible — no
+# into runs shorter than 7 nt is never seeded and is silently invisible -- no
 # matter how permissive max_primer_mismatches is. That blind spot grows as
 # oligos get shorter: for a 17-mer it hides 7.4% of 2-mismatch placements, and
 # for a 13-mer probe 7.7% of SINGLE-mismatch placements. word_size 4 (the
-# minimum blastn allows, and simulate_PCR's default — Gardner & Slezak 2014,
+# minimum blastn allows, and simulate_PCR's default -- Gardner & Slezak 2014,
 # doi:10.1186/1471-2105-15-237) reduces that to zero for every oligo length and
 # mismatch budget used here, at a small cost in search time. Raise it only to
 # trade sensitivity for speed.
@@ -61,7 +68,7 @@ blast_word_size: 4
 # blastn defaults -max_target_seqs to 500. In a per-assembly database the
 # subjects are contigs, and with these permissive settings a short oligo seeds
 # hits on many of them, so a fragmented draft assembly can exceed the cap and
-# lose real binding sites — the cap is applied during the search, not as a
+# lose real binding sites -- the cap is applied during the search, not as a
 # post-hoc "keep the best 500" (Shah et al. 2019, doi:10.1093/bioinformatics/bty833).
 # Set far above any plausible contig count so it never binds.
 blast_max_target_seqs: 50000

@@ -54,6 +54,20 @@ def test_filter_alerts_pass_through():
     assert filter_terminal_line("Traceback (most recent call last):", state)
 
 
+def test_filter_python_warnings_cleaned_and_shown_once():
+    """Every per-assembly job re-reads the assay table, so a table warning
+    arrives once per job; show it once, without the source-path prefix."""
+    state = {}
+    line = ("/x/workflow/scripts/table_io.py:102: UserWarning: assay_table.csv "
+            "is not UTF-8; read it as Mac Roman\n")
+    assert filter_terminal_line(line, state) == [
+        "  warning: assay_table.csv is not UTF-8; read it as Mac Roman"]
+    assert filter_terminal_line(line, state) == []
+    # errors are never de-duplicated
+    assert filter_terminal_line("Error in rule run_detection:", state)
+    assert filter_terminal_line("Error in rule run_detection:", state)
+
+
 def test_filter_suppresses_noise():
     state = {}
     assert filter_terminal_line("Building DAG of jobs...", state) == []

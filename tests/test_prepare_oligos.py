@@ -83,3 +83,21 @@ def test_write_fasta_correct_count(tmp_path):
     write_oligo_fasta(assays, str(fasta_out), str(log_out))
     headers = [l for l in fasta_out.read_text().splitlines() if l.startswith('>')]
     assert len(headers) == 6  # 2 assays × 3 oligos
+
+
+def test_load_assay_table_excel_mac_roman(tmp_path):
+    """Excel for Mac saves plain CSV as Mac Roman; non-ASCII free text in a
+    notes column must not crash the run (it used to: UnicodeDecodeError)."""
+    csv_path = tmp_path / "assay_table.csv"
+    csv_path.write_bytes(
+        "assay,fwd,rev,probe,notes\r\nX,TTTT,CCCC,,14–15 cycles at 60 °C\r\n"
+        .encode("mac_roman"))
+    with pytest.warns(UserWarning, match="Mac Roman"):
+        assays = load_assay_table(str(csv_path))
+    assert assays[0]['notes'] == "14–15 cycles at 60 °C"
+
+
+def test_load_assay_table_trims_trailing_space_in_primer(tmp_path):
+    csv_path = tmp_path / "assay_table.csv"
+    csv_path.write_text("assay,fwd,rev,probe\nX,TTTT ,CCCC,\n")
+    assert load_assay_table(str(csv_path))[0]['fwd'] == 'TTTT'

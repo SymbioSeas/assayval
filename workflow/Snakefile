@@ -74,6 +74,15 @@ def blast_output(path):
     return path if KEEP_BLAST else temp(path)
 
 
+# Amplicon FASTA export: one FASTA per assay of every valid amplicon (Detected
+# and Primer Only), with amplicon_flank_bp of flanking sequence on each side.
+# On by default; older config.yaml files without these keys get the defaults.
+AMPLICON_FASTA = _as_bool(config.get("amplicon_fasta"), True)
+AMPLICON_FLANK_BP = int(config.get("amplicon_flank_bp", 50))
+if AMPLICON_FLANK_BP < 0:
+    raise ValueError("amplicon_flank_bp must be >= 0")
+
+
 # Intentional duplicate of normalize_group_by() in workflow/scripts/summarize.py:
 # Snakemake evaluates this at DAG-build time in a separate process from the summarize
 # script, so it can't import that function directly. Keep the two in sync.
@@ -95,6 +104,7 @@ rule all:
         RESULTS + "/reports/detection_by_assembly.csv",
         RESULTS + "/reports/assay_performance.csv",
         RESULTS + "/reports/run_manifest.txt",
+        [RESULTS + "/amplicon_fasta"] if AMPLICON_FASTA else [],
 
 
 # In re-score mode the oligo FASTA, the per-assembly BLAST databases and the
@@ -109,8 +119,12 @@ if not RESCORE_FROM:
 
 include: "rules/detect.smk"
 include: "rules/report.smk"
+if AMPLICON_FASTA:
+    include: "rules/export.smk"
 
 
 onsuccess:
     if not KEEP_LOGS:
         shutil.rmtree(Path(RESULTS) / "logs", ignore_errors=True)
+    # Per-assembly amplicon records are temp(); drop the emptied directory.
+    shutil.rmtree(Path(RESULTS) / "amplicon_records", ignore_errors=True)

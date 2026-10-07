@@ -70,3 +70,16 @@ def test_run_mode_still_parses_without_init(tmp_path, capsys):
     rc = cli.main(["--directory", str(tmp_path)], runner=lambda c, l: 0)
     assert rc == 2
     assert "assay-val init" in capsys.readouterr().err
+
+
+def test_init_assay_table_has_utf8_bom(tmp_path):
+    """The BOM makes Excel open the file as "CSV UTF-8", so a plain Save keeps
+    UTF-8 instead of falling back to Mac Roman / Windows-1252."""
+    cli.main(["init", "--directory", str(tmp_path)])
+    assert (tmp_path / "assay_table.csv").read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+def test_config_template_is_pure_ascii():
+    """An ASCII config survives any editor's re-encoding unchanged."""
+    data = (REPO / "config" / "config.yaml").read_bytes()
+    assert all(b < 128 for b in data), "non-ASCII byte in config/config.yaml"
